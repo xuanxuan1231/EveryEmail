@@ -1,0 +1,422 @@
+import 'package:drift/drift.dart' hide Column;
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+
+import '../../app/providers.dart';
+import '../../core/utils/id_generator.dart';
+import '../../data/backends/imap/imap_mail_backend.dart';
+import '../../data/local/database/app_database.dart';
+import '../../domain/enums/account_enums.dart';
+import '../../domain/models/account_config.dart';
+
+/// 密码输入页面（IMAP 账户）。
+///
+/// 流程：
+/// 1. 显示自动发现的服务器配置
+/// 2. 输入密码
+/// 3. 测试连接
+/// 4. 保存账户配置
+/// 5. 导航到主界面
+class PasswordPage extends ConsumerStatefulWidget {
+  const PasswordPage({
+    required this.email,
+    required this.imap,
+    this.smtp,
+    super.key,
+  });
+
+  final String email;
+  final ServerConfig imap;
+  final ServerConfig? smtp;
+
+  @override
+  ConsumerState<PasswordPage> createState() => _PasswordPageState();
+}
+
+class _PasswordPageState extends ConsumerState<PasswordPage> {
+  final _formKey = GlobalKey<FormState>();
+  final _passwordController = TextEditingController();
+  bool _obscurePassword = true;
+  bool _isTesting = false;
+  String? _errorMessage;
+
+  /// 检查是否是 Office 365 服务器。
+  bool get _isOffice365 {
+    final imapHost = widget.imap.host.toLowerCase();
+    final smtpHost = widget.smtp?.host.toLowerCase() ?? '';
+
+    return imapHost.contains('outlook.office365.com') ||
+        imapHost.contains('imap-mail.outlook.com') ||
+        smtpHost.contains('smtp.office365.com') ||
+        smtpHost.contains('smtp-mail.outlook.com');
+  }
+
+  @override
+  void dispose() {
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  /// 使用 OAuth 登录（Office 365）。
+  Future<void> _loginWithOAuth() async {
+    // 跳转到 OAuth 登录页面
+    context.push(
+      '/onboarding/oauth?type=${AccountType.microsoftGraph.name}&email=${Uri.encodeComponent(widget.email)}',
+    );
+  }
+
+  Future<void> _testAndSave() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    setState(() {
+      _isTesting = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final password = _passwordController.text;
+      final tokenStore = ref.read(tokenStoreProvider);
+      final db = ref.read(databaseProvider);
+
+      // 1. 生成临时账户配置用于测试连接
+      final testAccount = AccountConfig(
+        id: 'test',
+        email: widget.email,
+        displayName: widget.email,
+        type: AccountType.genericImap,
+        authType: AuthType.password,
+        imap: widget.imap,
+        smtp: widget.smtp,
+        secretRef: null,
+      );
+
+      // 2. 测试 IMAP 连接
+      final backend = ImapMailBackend(
+        account: testAccount,
+        password: password,
+      );
+
+      await backend.connect();
+      await backend.disconnect();
+
+      // 3. 生成账户 ID 和密钥引用
+      final accountId = generateId();
+      final secretRef = 'account_$accountId';
+
+      // 4. 保存密码到安全存储
+      await tokenStore.writePassword(secretRef, password);
+
+      // 5. 保存账户配置到数据库
+      await db.accountDao.insertAccount(
+        AccountsCompanion.insert(
+          id: accountId,
+          email: widget.email,
+          displayName: widget.email.split('@').first,
+          accountType: AccountType.genericImap,
+          authType: AuthType.password,
+          secretRef: Value(secretRef),
+          imapHost: Value(widget.imap.host),
+          imapPort: Value(widget.imap.port),
+          imapSocketType: Value(widget.imap.socketType),
+          smtpHost: Value(widget.smtp?.host),
+          smtpPort: Value(widget.smtp?.port),
+          smtpSocketType: Value(widget.smtp?.socketType),
+          colorValue: Value(_generateAccountColor()),
+        ),
+      );
+
+      // 6. 导航到同步配置页面
+      if (mounted) {
+        context.push('/onboarding/sync-config?email=${Uri.encodeComponent(widget.email)}&accountId=${Uri.encodeComponent(accountId)}');
+      }
+    } catch (e) {
+      setState(() {
+        _isTesting = false;
+        _errorMessage = '连接失败: ${e.toString()}';
+      });
+    }
+  }
+
+  int _generateAccountColor() {
+    final colors = [
+      Colors.blue.value,
+      Colors.green.value,
+      Colors.orange.value,
+      Colors.purple.value,
+      Colors.teal.value,
+      Colors.pink.value,
+      Colors.indigo.value,
+      Colors.amber.value,
+    ];
+    return colors[DateTime.now().millisecondsSinceEpoch % colors.length];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('输入密码'),
+      ),
+      body: Form(
+        key: _formKey,
+        child: ListView(
+          padding: const EdgeInsets.all(24.0),
+          children: [
+            // 邮箱地址
+            Text(
+              widget.email,
+              style: theme.textTheme.headlineSmall,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '已自动配置服务器设置',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 32),
+
+            // 服务器配置卡片
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '服务器配置',
+                      style: theme.textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 16),
+                    _buildServerInfo('IMAP', widget.imap),
+                    if (widget.smtp != null) ...[
+                      const Divider(height: 24),
+                      _buildServerInfo('SMTP', widget.smtp!),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 24),
+
+            // Office 365 检测提示
+            if (_isOffice365) ...[
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primaryContainer,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.info_outline,
+                      color: theme.colorScheme.onPrimaryContainer,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '检测到 Microsoft 365 / Office 365',
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              color: theme.colorScheme.onPrimaryContainer,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '推荐使用 OAuth 登录，更安全且无需应用专用密码',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onPrimaryContainer,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+
+              // OAuth 登录按钮
+              FilledButton.icon(
+                onPressed: _isTesting ? null : _loginWithOAuth,
+                icon: const Icon(Icons.login),
+                label: const Text('使用 Microsoft 账号登录'),
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(48),
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // 分隔线
+              Row(
+                children: [
+                  const Expanded(child: Divider()),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Text(
+                      '或使用密码登录',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                  const Expanded(child: Divider()),
+                ],
+              ),
+              const SizedBox(height: 16),
+            ],
+
+            // 密码输入
+            TextFormField(
+              controller: _passwordController,
+              obscureText: _obscurePassword,
+              decoration: InputDecoration(
+                labelText: '密码',
+                hintText: '输入邮箱密码',
+                prefixIcon: const Icon(Icons.lock_outline),
+                suffixIcon: IconButton(
+                  icon: Icon(
+                    _obscurePassword ? Icons.visibility : Icons.visibility_off,
+                  ),
+                  onPressed: () {
+                    setState(() {
+                      _obscurePassword = !_obscurePassword;
+                    });
+                  },
+                ),
+                border: const OutlineInputBorder(),
+              ),
+              validator: (value) {
+                if (value == null || value.isEmpty) {
+                  return '请输入密码';
+                }
+                return null;
+              },
+              enabled: !_isTesting,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '密码将安全存储在设备上',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+
+            // 错误消息
+            if (_errorMessage != null) ...[
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.errorContainer,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.error_outline,
+                      color: theme.colorScheme.error,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        _errorMessage!,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: theme.colorScheme.onErrorContainer,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+
+            const SizedBox(height: 32),
+
+            // 操作按钮
+            FilledButton(
+              onPressed: _isTesting ? null : _testAndSave,
+              child: _isTesting
+                  ? const SizedBox(
+                      height: 20,
+                      width: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('测试连接并保存'),
+            ),
+
+            const SizedBox(height: 12),
+
+            // 手动设置按钮
+            OutlinedButton(
+              onPressed: _isTesting
+                  ? null
+                  : () {
+                      context.push('/onboarding/manual?email=${Uri.encodeComponent(widget.email)}');
+                    },
+              child: const Text('修改服务器设置'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildServerInfo(String label, ServerConfig config) {
+    final theme = Theme.of(context);
+    final socketTypeLabel = config.socketType == SocketType.ssl
+        ? 'SSL/TLS'
+        : config.socketType == SocketType.starttls
+            ? 'STARTTLS'
+            : '明文';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: theme.textTheme.labelLarge?.copyWith(
+            color: theme.colorScheme.primary,
+          ),
+        ),
+        const SizedBox(height: 8),
+        _buildInfoRow('服务器', config.host),
+        _buildInfoRow('端口', config.port.toString()),
+        _buildInfoRow('加密', socketTypeLabel),
+      ],
+    );
+  }
+
+  Widget _buildInfoRow(String label, String value) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 60,
+            child: Text(
+              label,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: theme.textTheme.bodyMedium,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

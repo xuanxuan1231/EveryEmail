@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "970518560740",
+    "project_id": "everyemail",
+    "storage_bucket": "everyemail.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:970518560740:android:2d23d2a9bd9a981caf11f1",
+        "android_client_info": {
+          "package_name": "com.everyemail.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDTnNQmWNETiyi4mQyw53chlPCyiF-8RfY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

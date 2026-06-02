@@ -1,0 +1,597 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+
+import '../../app/providers.dart';
+import '../../data/local/database/app_database.dart';
+import '../../data/local/database/message_with_account.dart';
+import '../../domain/models/account_config.dart';
+
+/// 主页面（移动端布局）。
+///
+/// 布局：
+/// - 主界面：邮件列表（Gmail 风格卡片）
+/// - 侧边栏：文件夹树（统一收件箱 + 各账户文件夹）
+/// - 详情页：独立路由页面
+class HomePage extends ConsumerStatefulWidget {
+  const HomePage({super.key});
+
+  @override
+  ConsumerState<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends ConsumerState<HomePage> {
+  String? _selectedFolderId;
+  String? _selectedAccountId;
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+
+  bool get _isUnifiedInbox => _selectedFolderId == null && _selectedAccountId == null;
+
+  @override
+  Widget build(BuildContext context) {
+    final accountsAsync = ref.watch(accountsStreamProvider);
+
+    return accountsAsync.when(
+      data: (accounts) {
+        if (accounts.isEmpty) {
+          return _buildEmptyState(context);
+        }
+        return _buildMainLayout(context, accounts);
+      },
+      loading: () => const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      ),
+      error: (error, stack) => Scaffold(
+        body: Center(
+          child: Text('加载失败: $error'),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEmptyState(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Scaffold(
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.mail_outline,
+                size: 120,
+                color: theme.colorScheme.primary.withValues(alpha: 0.5),
+              ),
+              const SizedBox(height: 24),
+              Text(
+                '欢迎使用 EveryEmail',
+                style: theme.textTheme.headlineMedium,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '添加邮箱账户开始使用',
+                style: theme.textTheme.bodyLarge?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 32),
+              FilledButton.icon(
+                onPressed: () => context.push('/onboarding/add'),
+                icon: const Icon(Icons.add),
+                label: const Text('添加账户'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMainLayout(BuildContext context, List<dynamic> accounts) {
+    final theme = Theme.of(context);
+
+    return Scaffold(
+      key: _scaffoldKey,
+      appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.menu),
+          onPressed: () {
+            _scaffoldKey.currentState?.openDrawer();
+          },
+        ),
+        title: Text(_getFolderTitle()),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.search),
+            onPressed: () {
+              // TODO: 搜索功能
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.more_vert),
+            onPressed: () {
+              // TODO: 更多选项
+            },
+          ),
+        ],
+      ),
+      drawer: _buildDrawer(context, accounts),
+      body: _MessageList(
+        folderId: _selectedFolderId,
+        accountId: _selectedAccountId,
+        onMessageTap: (messageId) {
+          context.push('/message/$messageId');
+        },
+        onRefresh: () async {
+          // 触发同步
+          final syncService = ref.read(syncServiceProvider);
+          if (_isUnifiedInbox) {
+            // 同步所有账户
+            for (final account in accounts) {
+              await _syncAccount(syncService, account);
+            }
+          } else if (_selectedAccountId != null) {
+            // 同步选中的账户
+            final account = accounts.firstWhere((a) => a.id == _selectedAccountId);
+            await _syncAccount(syncService, account);
+          }
+        },
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () {
+          // TODO: 撰写邮件
+        },
+        child: const Icon(Icons.edit),
+      ),
+    );
+  }
+
+  Widget _buildDrawer(BuildContext context, List<dynamic> accounts) {
+    final theme = Theme.of(context);
+
+    return Drawer(
+      child: Column(
+        children: [
+          DrawerHeader(
+            decoration: BoxDecoration(
+              color: theme.colorScheme.primaryContainer,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                Text(
+                  'EveryEmail',
+                  style: theme.textTheme.headlineSmall?.copyWith(
+                    color: theme.colorScheme.onPrimaryContainer,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '${accounts.length} 个账户',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onPrimaryContainer,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: ListView(
+              padding: EdgeInsets.zero,
+              children: [
+                // 统一收件箱
+                ListTile(
+                  leading: const Icon(Icons.inbox),
+                  title: const Text('统一收件箱'),
+                  selected: _isUnifiedInbox,
+                  onTap: () {
+                    setState(() {
+                      _selectedFolderId = null;
+                      _selectedAccountId = null;
+                    });
+                    Navigator.pop(context);
+                  },
+                ),
+                const Divider(),
+
+                // 各账户
+                ...accounts.map((account) {
+                  final isAccountSelected = _selectedAccountId == account.id && _selectedFolderId == null;
+
+                  return ExpansionTile(
+                    leading: CircleAvatar(
+                      backgroundColor: Color(account.colorValue ?? Colors.blue.value),
+                      radius: 16,
+                      child: Text(
+                        account.email[0].toUpperCase(),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                    title: Text(account.displayName),
+                    subtitle: Text(
+                      account.email,
+                      style: theme.textTheme.bodySmall,
+                    ),
+                    backgroundColor: isAccountSelected
+                        ? theme.colorScheme.secondaryContainer.withValues(alpha: 0.3)
+                        : null,
+                    children: [
+                      // 账户收件箱
+                      ListTile(
+                        leading: const SizedBox(width: 16),
+                        title: const Text('收件箱'),
+                        dense: true,
+                        selected: isAccountSelected,
+                        onTap: () {
+                          setState(() {
+                            _selectedAccountId = account.id;
+                            _selectedFolderId = null;
+                          });
+                          Navigator.pop(context);
+                        },
+                      ),
+                      // TODO: 显示该账户的其他文件夹
+                    ],
+                  );
+                }),
+              ],
+            ),
+          ),
+          const Divider(),
+          ListTile(
+            leading: const Icon(Icons.add),
+            title: const Text('添加账户'),
+            onTap: () {
+              Navigator.pop(context);
+              context.push('/onboarding/add');
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.settings),
+            title: const Text('设置'),
+            onTap: () {
+              Navigator.pop(context);
+              // TODO: 设置页面
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _getFolderTitle() {
+    if (_isUnifiedInbox) {
+      return '统一收件箱';
+    }
+    if (_selectedAccountId != null && _selectedFolderId == null) {
+      return '账户收件箱';
+    }
+    // TODO: 根据 folderId 返回文件夹名称
+    return '收件箱';
+  }
+
+  Future<void> _syncAccount(dynamic syncService, dynamic account) async {
+    try {
+      final accountConfig = AccountConfig(
+        id: account.id,
+        email: account.email,
+        displayName: account.displayName,
+        type: account.accountType,
+        authType: account.authType,
+        secretRef: account.secretRef,
+        imap: account.imapHost != null
+            ? ServerConfig(
+                host: account.imapHost!,
+                port: account.imapPort!,
+                socketType: account.imapSocketType!,
+              )
+            : null,
+        smtp: account.smtpHost != null
+            ? ServerConfig(
+                host: account.smtpHost!,
+                port: account.smtpPort!,
+                socketType: account.smtpSocketType!,
+              )
+            : null,
+        colorValue: account.colorValue,
+      );
+      await syncService.syncAccount(accountConfig);
+    } catch (e) {
+      debugPrint('同步账户失败: $e');
+    }
+  }
+}
+
+/// 邮件列表组件（移动端优化）。
+class _MessageList extends ConsumerWidget {
+  const _MessageList({
+    required this.folderId,
+    required this.accountId,
+    required this.onMessageTap,
+    required this.onRefresh,
+  });
+
+  final String? folderId;
+  final String? accountId;
+  final ValueChanged<String> onMessageTap;
+  final Future<void> Function() onRefresh;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+
+    // 统一收件箱
+    if (folderId == null && accountId == null) {
+      return _buildUnifiedInbox(context, ref, theme);
+    }
+
+    // 单个账户的收件箱
+    if (accountId != null && folderId == null) {
+      return _buildAccountInbox(context, ref, theme);
+    }
+
+    // TODO: 特定文件夹
+    return Center(
+      child: Text(
+        '文件夹视图开发中',
+        style: theme.textTheme.bodyLarge?.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildUnifiedInbox(BuildContext context, WidgetRef ref, ThemeData theme) {
+    final unifiedInboxAsync = ref.watch(unifiedInboxProvider);
+
+    return unifiedInboxAsync.when(
+      data: (messages) {
+        if (messages.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.inbox_outlined,
+                  size: 64,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  '没有邮件',
+                  style: theme.textTheme.bodyLarge?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return RefreshIndicator(
+          onRefresh: onRefresh,
+          child: _buildMessageListView(messages, theme),
+        );
+      },
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (error, stack) => _buildErrorState(theme, error),
+    );
+  }
+
+  Widget _buildAccountInbox(BuildContext context, WidgetRef ref, ThemeData theme) {
+    final accountMessagesAsync = ref.watch(accountMessagesProvider(accountId!));
+
+    return accountMessagesAsync.when(
+      data: (messages) {
+        if (messages.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.inbox_outlined,
+                  size: 64,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  '没有邮件',
+                  style: theme.textTheme.bodyLarge?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return RefreshIndicator(
+          onRefresh: onRefresh,
+          child: _buildAccountMessageListView(messages, theme),
+        );
+      },
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (error, stack) => _buildErrorState(theme, error),
+    );
+  }
+
+  Widget _buildMessageListView(List<MessageWithAccount> messages, ThemeData theme) {
+    return ListView.builder(
+      itemCount: messages.length,
+      itemBuilder: (context, index) {
+        final item = messages[index];
+        final message = item.message;
+        final isRead = (message.flagsBitmask & 1) != 0;
+
+                return InkWell(
+                  onTap: () => onMessageTap(message.id),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                    decoration: BoxDecoration(
+                      border: Border(
+                        bottom: BorderSide(
+                          color: theme.colorScheme.outlineVariant,
+                          width: 0.5,
+                        ),
+                      ),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // 头像
+                        CircleAvatar(
+                          backgroundColor: Color(item.accountColorValue ?? Colors.blue.value),
+                          radius: 20,
+                          child: Text(
+                            (message.fromName ?? message.fromEmail ?? '?')[0].toUpperCase(),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+
+                        // 邮件信息
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // 发件人和时间
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      message.fromName ?? message.fromEmail ?? '未知发件人',
+                                      style: theme.textTheme.bodyMedium?.copyWith(
+                                        fontWeight: isRead ? FontWeight.normal : FontWeight.bold,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    _formatDate(message.date),
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+
+                              // 主题
+                              Text(
+                                message.subject,
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                  fontWeight: isRead ? FontWeight.normal : FontWeight.w500,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              const SizedBox(height: 2),
+
+                              // 预览
+                              if (message.preview.isNotEmpty)
+                                Text(
+                                  message.preview,
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              const SizedBox(height: 4),
+
+                              // 账户标签
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Color(item.accountColorValue ?? Colors.blue.value)
+                                      .withValues(alpha: 0.2),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                  item.accountEmail,
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color: Color(item.accountColorValue ?? Colors.blue.value),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          );
+        },
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (error, stack) => Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.error_outline,
+                size: 64,
+                color: theme.colorScheme.error,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                '加载失败',
+                style: theme.textTheme.bodyLarge,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                error.toString(),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // TODO: 单个文件夹的邮件列表
+    return Center(
+      child: Text(
+        '文件夹视图开发中',
+        style: theme.textTheme.bodyLarge?.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+
+  String _formatDate(DateTime date) {
+    final now = DateTime.now();
+    final diff = now.difference(date);
+
+    if (diff.inDays == 0) {
+      return '${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
+    } else if (diff.inDays < 7) {
+      return '${diff.inDays}天前';
+    } else {
+      return '${date.month}/${date.day}';
+    }
+  }
+}

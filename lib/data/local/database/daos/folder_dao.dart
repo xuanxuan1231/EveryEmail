@@ -1,0 +1,78 @@
+import 'package:drift/drift.dart';
+
+import '../../../../domain/enums/message_enums.dart';
+import '../app_database.dart';
+import '../tables.dart';
+
+part 'folder_dao.g.dart';
+
+/// 文件夹读写。
+@DriftAccessor(tables: [Folders])
+class FolderDao extends DatabaseAccessor<AppDatabase> with _$FolderDaoMixin {
+  FolderDao(super.db);
+
+  /// 监听某账户的文件夹列表（按排序序号）。
+  Stream<List<Folder>> watchFolders(String accountId) {
+    return (select(folders)
+          ..where((t) => t.accountId.equals(accountId))
+          ..orderBy([(t) => OrderingTerm.asc(t.sortIndex)]))
+        .watch();
+  }
+
+  Future<List<Folder>> getFolders(String accountId) {
+    return (select(folders)..where((t) => t.accountId.equals(accountId))).get();
+  }
+
+  Future<Folder?> getFolder(String id) {
+    return (select(folders)..where((t) => t.id.equals(id))).getSingleOrNull();
+  }
+
+  /// 按后端原生标识查找（同步对账时把远端文件夹映射到本地行）。
+  Future<Folder?> getByRemoteId(String accountId, String remoteId) {
+    return (select(folders)
+          ..where((t) => t.accountId.equals(accountId) & t.remoteId.equals(remoteId)))
+        .getSingleOrNull();
+  }
+
+  Future<void> upsertFolder(FoldersCompanion folder) {
+    return into(folders).insertOnConflictUpdate(folder);
+  }
+
+  Future<void> upsertFolders(List<FoldersCompanion> rows) async {
+    await batch((b) {
+      b.insertAllOnConflictUpdate(folders, rows);
+    });
+  }
+
+  Future<void> updateCounts(String id, {int? unread, int? total}) {
+    return (update(folders)..where((t) => t.id.equals(id))).write(
+      FoldersCompanion(
+        unreadCount:
+            unread == null ? const Value.absent() : Value(unread),
+        totalCount: total == null ? const Value.absent() : Value(total),
+      ),
+    );
+  }
+
+  /// 同步对账时使用：用远端最新值覆盖类型、名称和计数。
+  /// 旧版 Graph 后端没有 select wellKnownName，所有文件夹被错误写为 custom；
+  /// 升级后需要重写类型，否则 inbox 永远不会被识别。
+  Future<void> updateFromRemote(
+    String id, {
+    required String displayName,
+    required FolderType folderType,
+    required int unreadCount,
+    required int totalCount,
+    required int sortIndex,
+  }) {
+    return (update(folders)..where((t) => t.id.equals(id))).write(
+      FoldersCompanion(
+        displayName: Value(displayName),
+        folderType: Value(folderType),
+        unreadCount: Value(unreadCount),
+        totalCount: Value(totalCount),
+        sortIndex: Value(sortIndex),
+      ),
+    );
+  }
+}

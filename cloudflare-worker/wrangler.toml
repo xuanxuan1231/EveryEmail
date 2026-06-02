@@ -1,0 +1,26 @@
+name = "everyemail-webhook"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+# Workers KV 命名空间（用于存储订阅信息和 FCM tokens）
+[[kv_namespaces]]
+binding = "KV"
+id = "cf3d69d38f0144ad96a925ec6dc306cc"  # 运行 wrangler kv:namespace create "KV" 获取
+
+# 环境变量
+[vars]
+WORKER_URL = "https://everyemail-webhook.17635169264012.workers.dev"
+FIREBASE_PROJECT_ID = "970518560740"
+
+# 富通知加密（开启后推送通知含邮件主题/发件人）。两者都配齐才生效，
+# 留空则降级为通用文案“新邮件 / 您有新邮件”（去重修复不受影响）。
+# 生成证书：
+#   openssl req -x509 -newkey rsa:2048 -keyout enc_private.pem -out enc_cert.pem \
+#     -days 3650 -nodes -subj "/CN=everyemail-fcm"
+# 私钥走 secret（不入库）：wrangler secret put ENCRYPTION_PRIVATE_KEY  ← 粘贴 enc_private.pem 全文
+# 下面填 enc_cert.pem 中 BEGIN/END CERTIFICATE 之间的 base64（去头尾、拼成一行）：
+# ENCRYPTION_CERTIFICATE = "MIID...（一行）"
+# ENCRYPTION_CERTIFICATE_ID = "everyemail-key-1"
+
+[observability]
+enabled = true
