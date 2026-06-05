@@ -38,7 +38,8 @@ class WebhookManager {
   /// 订阅参数格式版本。改动订阅创建参数（changeType / includeResourceData 等）
   /// 时递增；App 启动发现旧版本会自动删除并重建订阅。
   /// v2: 只订阅 created + 富通知加密（去重 + 通知含主题/发件人）。
-  static const int _subscriptionSchemaVersion = 2;
+  /// v3: created+updated —— created 发通知消息，updated 发静默数据消息（仅触发同步，不打扰用户）。
+  static const int _subscriptionSchemaVersion = 3;
 
   // ---------- 单账户启用/禁用 ----------
 
@@ -229,9 +230,10 @@ class WebhookManager {
 
       final account = _rowToConfig(accountData);
 
-      debugPrint('触发增量同步...');
-      await syncService.syncAccount(account);
-      debugPrint('同步完成');
+      // 去抖 + 串行触发：一封新邮件 Graph 会连发多条 updated 静默推送，
+      // 合并成一次增量同步，避免重复全量同步。
+      debugPrint('请求增量同步（去抖）...');
+      syncService.requestSync(account);
     } catch (e) {
       debugPrint('处理推送通知失败: $e');
     }

@@ -5,6 +5,7 @@ import '../data/auth/oauth_service.dart';
 import '../data/local/database/app_database.dart';
 import '../data/repositories/account_repository.dart';
 import '../data/secure/token_store.dart';
+import '../data/settings/app_font_settings.dart';
 import '../data/sync/realtime_sync_service.dart';
 import '../data/sync/sync_service.dart';
 import '../data/webhook/webhook_manager.dart';
@@ -17,6 +18,23 @@ final databaseProvider = Provider<AppDatabase>((ref) {
 });
 
 final tokenStoreProvider = Provider<TokenStore>((ref) => TokenStore());
+
+/// 当前应用字体。在 [bootstrap] 中读出持久化值后，通过 overrideWith 注入真实控制器，
+/// 这里给一个会抛错的占位，确保未初始化时能快速失败（与 [databaseProvider] 同构）。
+final appFontProvider = StateNotifierProvider<AppFontController, AppFont>((ref) {
+  throw UnimplementedError('appFontProvider 必须在 ProviderScope overrides 中注入初始字体');
+});
+
+/// 应用字体控制器：切换即时生效（主题 watch 此 provider）并持久化。
+class AppFontController extends StateNotifier<AppFont> {
+  AppFontController(super.initial);
+
+  Future<void> set(AppFont font) async {
+    if (font == state) return;
+    state = font;
+    await AppFontSettings.write(font);
+  }
+}
 
 final oauthServiceProvider = Provider<OAuthService>((ref) => OAuthService());
 
@@ -45,7 +63,7 @@ final realtimeSyncServiceProvider = Provider<RealtimeSyncService>((ref) {
 /// Webhook 服务。
 final webhookServiceProvider = Provider<WebhookService>((ref) {
   return WebhookService(
-    workerUrl: 'https://everyemail-webhook.17635169264012.workers.dev',
+    workerUrl: 'https://ee-webhook.gemen.pp.ua',
   );
 });
 

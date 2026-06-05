@@ -96,7 +96,7 @@ cat serviceAccountKey.json | tr -d '\n' | wrangler secret put FIREBASE_SERVICE_A
 
 在 `wrangler.toml` 中更新 `WORKER_URL` 为你的 Worker URL：
 ```
-https://everyemail-webhook.YOUR_SUBDOMAIN.workers.dev
+https://ee-webhook.gemen.pp.ua
 ```
 
 ### 6. 部署
@@ -266,13 +266,13 @@ Service Account 需要以下权限：
 ### 测试健康检查
 
 ```bash
-curl https://everyemail-webhook.YOUR_SUBDOMAIN.workers.dev/health
+curl https://ee-webhook.gemen.pp.ua/health
 ```
 
 ### 测试 FCM 推送
 
 ```bash
-curl -X POST https://everyemail-webhook.YOUR_SUBDOMAIN.workers.dev/api/register-fcm \
+curl -X POST https://ee-webhook.gemen.pp.ua/api/register-fcm \
   -H "Content-Type: application/json" \
   -d '{
     "userId": "test-user",

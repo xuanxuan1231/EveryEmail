@@ -85,6 +85,14 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
+  # Google Sans Flex：以 OFL 许可开源的可变字体（含 wght 1–1000 轴），
+  # 用户可在设置页选择用它代替系统字体。可变字体只需声明单一 asset，
+  # Flutter 会把 TextStyle.fontWeight 映射到 wght 轴。
+  fonts:
+    - family: Google Sans Flex
+      fonts:
+        - asset: assets/fonts/GoogleSansFlex-Regular.ttf
+
   # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg

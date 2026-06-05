@@ -5,6 +5,7 @@ import 'app/app.dart';
 import 'app/bootstrap.dart';
 import 'app/fcm_bootstrap.dart';
 import 'app/providers.dart';
+import 'app/realtime_sync_coordinator.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -16,8 +17,11 @@ Future<void> main() async {
     ProviderScope(
       overrides: [
         databaseProvider.overrideWithValue(result.database),
+        appFontProvider.overrideWith((ref) => AppFontController(result.appFont)),
       ],
-      child: const FcmBootstrap(child: EveryMailApp()),
+      child: const FcmBootstrap(
+        child: RealtimeSyncCoordinator(child: EveryMailApp()),
+      ),
     ),
   );
 }

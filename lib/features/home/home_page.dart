@@ -28,7 +28,8 @@ class _HomePageState extends ConsumerState<HomePage> {
   String? _selectedFolderName; // 缓存选中的文件夹名称
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
-  bool get _isUnifiedInbox => _selectedFolderId == null && _selectedAccountId == null;
+  bool get _isUnifiedInbox =>
+      _selectedFolderId == null && _selectedAccountId == null;
 
   @override
   Widget build(BuildContext context) {
@@ -41,14 +42,10 @@ class _HomePageState extends ConsumerState<HomePage> {
         }
         return _buildMainLayout(context, accounts);
       },
-      loading: () => const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      ),
-      error: (error, stack) => Scaffold(
-        body: Center(
-          child: Text('加载失败: $error'),
-        ),
-      ),
+      loading: () =>
+          const Scaffold(body: Center(child: CircularProgressIndicator())),
+      error: (error, stack) =>
+          Scaffold(body: Center(child: Text('加载失败: $error'))),
     );
   }
 
@@ -68,10 +65,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                 color: theme.colorScheme.primary.withValues(alpha: 0.5),
               ),
               const SizedBox(height: 24),
-              Text(
-                '欢迎使用 EveryEmail',
-                style: theme.textTheme.headlineMedium,
-              ),
+              Text('欢迎使用 EveryEmail', style: theme.textTheme.headlineMedium),
               const SizedBox(height: 8),
               Text(
                 '添加邮箱账户开始使用',
@@ -113,7 +107,7 @@ class _HomePageState extends ConsumerState<HomePage> {
           IconButton(
             icon: const Icon(Icons.more_vert),
             onPressed: () {
-              // TODO: 更多选项
+              context.push('/settings');
             },
           ),
         ],
@@ -122,8 +116,11 @@ class _HomePageState extends ConsumerState<HomePage> {
       body: _MessageList(
         folderId: _selectedFolderId,
         accountId: _selectedAccountId,
-        onMessageTap: (messageId) {
-          context.push('/message/$messageId');
+        onMessageTap: (message) {
+          context.push(
+            '/message/${Uri.encodeComponent(message.id)}',
+            extra: message,
+          );
         },
         onRefresh: () async {
           // 触发同步
@@ -135,7 +132,9 @@ class _HomePageState extends ConsumerState<HomePage> {
             }
           } else if (_selectedAccountId != null) {
             // 同步选中的账户
-            final account = accounts.firstWhere((a) => a.id == _selectedAccountId);
+            final account = accounts.firstWhere(
+              (a) => a.id == _selectedAccountId,
+            );
             await _syncAccount(syncService, account);
           }
         },
@@ -201,17 +200,25 @@ class _HomePageState extends ConsumerState<HomePage> {
 
                 // 各账户
                 ...accounts.map((account) {
-                  final isAccountSelected = _selectedAccountId == account.id && _selectedFolderId == null;
+                  final isAccountSelected =
+                      _selectedAccountId == account.id &&
+                      _selectedFolderId == null;
 
                   return Theme(
                     data: Theme.of(context).copyWith(
                       dividerColor: Colors.transparent,
-                      splashColor: theme.colorScheme.primary.withValues(alpha: 0.1),
-                      highlightColor: theme.colorScheme.primary.withValues(alpha: 0.05),
+                      splashColor: theme.colorScheme.primary.withValues(
+                        alpha: 0.1,
+                      ),
+                      highlightColor: theme.colorScheme.primary.withValues(
+                        alpha: 0.05,
+                      ),
                     ),
                     child: ExpansionTile(
                       leading: CircleAvatar(
-                        backgroundColor: Color(account.colorValue ?? Colors.blue.toARGB32()),
+                        backgroundColor: Color(
+                          account.colorValue ?? Colors.blue.toARGB32(),
+                        ),
                         radius: 16,
                         child: Text(
                           account.email[0].toUpperCase(),
@@ -224,7 +231,9 @@ class _HomePageState extends ConsumerState<HomePage> {
                       title: Text(
                         account.displayName,
                         style: TextStyle(
-                          fontWeight: isAccountSelected ? FontWeight.w600 : FontWeight.normal,
+                          fontWeight: isAccountSelected
+                              ? FontWeight.w600
+                              : FontWeight.normal,
                         ),
                       ),
                       subtitle: Text(
@@ -232,14 +241,21 @@ class _HomePageState extends ConsumerState<HomePage> {
                         style: theme.textTheme.bodySmall,
                       ),
                       backgroundColor: isAccountSelected
-                          ? theme.colorScheme.secondaryContainer.withValues(alpha: 0.3)
+                          ? theme.colorScheme.secondaryContainer.withValues(
+                              alpha: 0.3,
+                            )
                           : null,
                       collapsedBackgroundColor: isAccountSelected
-                          ? theme.colorScheme.secondaryContainer.withValues(alpha: 0.3)
+                          ? theme.colorScheme.secondaryContainer.withValues(
+                              alpha: 0.3,
+                            )
                           : null,
                       shape: const Border(),
                       collapsedShape: const Border(),
-                      tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                      tilePadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 4,
+                      ),
                       childrenPadding: EdgeInsets.zero,
                       children: [
                         // 显示该账户的所有文件夹
@@ -274,7 +290,11 @@ class _HomePageState extends ConsumerState<HomePage> {
   }
 
   /// 构建账户的文件夹列表。
-  Widget _buildAccountFolders(BuildContext context, Account account, ThemeData theme) {
+  Widget _buildAccountFolders(
+    BuildContext context,
+    Account account,
+    ThemeData theme,
+  ) {
     final db = ref.read(databaseProvider);
 
     return StreamBuilder<List<Folder>>(
@@ -296,14 +316,14 @@ class _HomePageState extends ConsumerState<HomePage> {
             final isFolderSelected = _selectedFolderId == folder.id;
 
             return ListTile(
-              leading: Icon(
-                _getFolderIcon(folder.folderType),
-                size: 20,
-              ),
+              leading: Icon(_getFolderIcon(folder.folderType), size: 20),
               title: Text(folder.displayName),
               trailing: folder.unreadCount > 0
                   ? Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
                       decoration: BoxDecoration(
                         color: theme.colorScheme.primary,
                         borderRadius: BorderRadius.circular(12),
@@ -320,7 +340,8 @@ class _HomePageState extends ConsumerState<HomePage> {
                   : null,
               dense: true,
               selected: isFolderSelected,
-              selectedTileColor: theme.colorScheme.secondaryContainer.withValues(alpha: 0.2),
+              selectedTileColor: theme.colorScheme.secondaryContainer
+                  .withValues(alpha: 0.2),
               shape: const Border(),
               contentPadding: const EdgeInsets.only(left: 56, right: 16),
               onTap: () {
@@ -414,7 +435,7 @@ class _MessageList extends ConsumerWidget {
 
   final String? folderId;
   final String? accountId;
-  final ValueChanged<String> onMessageTap;
+  final ValueChanged<Message> onMessageTap;
   final Future<void> Function() onRefresh;
 
   @override
@@ -446,7 +467,11 @@ class _MessageList extends ConsumerWidget {
     );
   }
 
-  Widget _buildUnifiedInbox(BuildContext context, WidgetRef ref, ThemeData theme) {
+  Widget _buildUnifiedInbox(
+    BuildContext context,
+    WidgetRef ref,
+    ThemeData theme,
+  ) {
     final unifiedInboxAsync = ref.watch(unifiedInboxProvider);
 
     return unifiedInboxAsync.when(
@@ -465,7 +490,11 @@ class _MessageList extends ConsumerWidget {
     );
   }
 
-  Widget _buildAccountInbox(BuildContext context, WidgetRef ref, ThemeData theme) {
+  Widget _buildAccountInbox(
+    BuildContext context,
+    WidgetRef ref,
+    ThemeData theme,
+  ) {
     final accountMessagesAsync = ref.watch(accountMessagesProvider(accountId!));
 
     return accountMessagesAsync.when(
@@ -484,7 +513,11 @@ class _MessageList extends ConsumerWidget {
     );
   }
 
-  Widget _buildFolderView(BuildContext context, WidgetRef ref, ThemeData theme) {
+  Widget _buildFolderView(
+    BuildContext context,
+    WidgetRef ref,
+    ThemeData theme,
+  ) {
     final db = ref.watch(databaseProvider);
     final messagesStream = db.messageDao.watchFolderMessages(folderId!);
 
@@ -513,7 +546,10 @@ class _MessageList extends ConsumerWidget {
     );
   }
 
-  Widget _buildMessageListView(List<MessageWithAccount> messages, ThemeData theme) {
+  Widget _buildMessageListView(
+    List<MessageWithAccount> messages,
+    ThemeData theme,
+  ) {
     return ListView.builder(
       itemCount: messages.length,
       itemBuilder: (context, index) {
@@ -522,7 +558,7 @@ class _MessageList extends ConsumerWidget {
 
         return GmailMobileMessageItem(
           message: message,
-          onTap: () => onMessageTap(message.id),
+          onTap: () => onMessageTap(message),
           accountEmail: item.accountEmail,
           accountColor: item.accountColorValue != null
               ? Color(item.accountColorValue!)
@@ -549,7 +585,7 @@ class _MessageList extends ConsumerWidget {
 
         return GmailMobileMessageItem(
           message: message,
-          onTap: () => onMessageTap(message.id),
+          onTap: () => onMessageTap(message),
           showAccountLabel: false,
           onStarTap: () {
             // TODO: 实现星标切换
@@ -569,16 +605,9 @@ class _MessageList extends ConsumerWidget {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(
-            Icons.error_outline,
-            size: 64,
-            color: theme.colorScheme.error,
-          ),
+          Icon(Icons.error_outline, size: 64, color: theme.colorScheme.error),
           const SizedBox(height: 16),
-          Text(
-            '加载失败',
-            style: theme.textTheme.bodyLarge,
-          ),
+          Text('加载失败', style: theme.textTheme.bodyLarge),
           const SizedBox(height: 8),
           Text(
             error.toString(),
@@ -634,5 +663,4 @@ class _MessageList extends ConsumerWidget {
       ),
     );
   }
-
 }

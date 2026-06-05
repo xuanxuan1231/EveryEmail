@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
 
@@ -128,8 +131,89 @@ class SyncService {
     return backend;
   }
 
+  /// 从 [accountId] 重建领域模型 [AccountConfig]（[_getBackend] 需要它）。
+  /// 映射与 AccountRepository.toConfig / WebhookManager._rowToConfig 保持一致。
+  Future<AccountConfig> accountConfigFor(String accountId) async {
+    final row = await _db.accountDao.getAccount(accountId);
+    if (row == null) {
+      throw Exception('账户不存在: $accountId');
+    }
+    return AccountConfig(
+      id: row.id,
+      email: row.email,
+      displayName: row.displayName,
+      type: row.accountType,
+      authType: row.authType,
+      secretRef: row.secretRef,
+      loginName: row.loginName,
+      colorValue: row.colorValue,
+      imap: row.imapHost == null
+          ? null
+          : ServerConfig(
+              host: row.imapHost!,
+              port: row.imapPort ?? 993,
+              socketType: row.imapSocketType ?? SocketType.ssl,
+            ),
+      smtp: row.smtpHost == null
+          ? null
+          : ServerConfig(
+              host: row.smtpHost!,
+              port: row.smtpPort ?? 465,
+              socketType: row.smtpSocketType ?? SocketType.ssl,
+            ),
+    );
+  }
+
+  /// 每账户同步串行链：保证同一账户不并发同步。
+  final Map<String, Future<void>> _accountSyncChain = {};
+
+  /// 每账户合并触发的去抖定时器。
+  final Map<String, Timer> _syncDebounce = {};
+
+  /// 合并触发窗口：把一阵触发（Graph 一封新邮件连发的多条 updated 静默推送、
+  /// 或 IMAP IDLE 连续事件）压成一次 [syncAccount]。
+  static const Duration _syncDebounceWindow = Duration(seconds: 3);
+
+  /// 请求一次（去抖 + 串行）账户同步。突发触发场景（FCM 静默数据消息 / IDLE 事件）
+  /// 应走这里而非直接 [syncAccount]，避免短时间内重复全量同步。
+  void requestSync(AccountConfig account) {
+    _syncDebounce[account.id]?.cancel();
+    _syncDebounce[account.id] = Timer(_syncDebounceWindow, () {
+      _syncDebounce.remove(account.id);
+      unawaited(syncAccount(account).catchError((Object e) {
+        debugPrint('requestSync: 同步失败: $e');
+      }));
+    });
+  }
+
   /// 同步账户：拉取文件夹列表和初始邮件。
+  ///
+  /// 同一账户的并发调用（手动刷新 / FCM 静默推送 / IMAP IDLE 触发）会被串行化，
+  /// 避免同时操作同一后端连接造成命令流交错。
   Future<void> syncAccount(AccountConfig account) async {
+    final prev = _accountSyncChain[account.id];
+    final completer = Completer<void>();
+    _accountSyncChain[account.id] = completer.future;
+    if (prev != null) {
+      try {
+        await prev;
+      } catch (_) {}
+    }
+    try {
+      await _syncAccountInner(account);
+    } finally {
+      if (identical(_accountSyncChain[account.id], completer.future)) {
+        _accountSyncChain.remove(account.id);
+      }
+      completer.complete();
+    }
+  }
+
+  Future<void> _syncAccountInner(AccountConfig account) async {
+    // 先把本地待推送变更（已读/标星/移动/删除等）刷到服务端，
+    // 否则随后的 delta 会用服务端旧值覆盖刚改完的本地新值。
+    await flushOutbox(account);
+
     final backend = await _getBackend(account);
 
     // 1. 拉取文件夹列表
@@ -195,6 +279,9 @@ class SyncService {
 
     // 持久化新增/更新的邮件
     await _persistMessages(result.added, folder);
+
+    // 应用入站标志变更（仅 flags，不覆盖其它列）。
+    await _applyFlagUpdates(result.updated, folder, account);
 
     // 删除已移除的邮件
     if (result.removedRefs.isNotEmpty) {
@@ -272,6 +359,49 @@ class SyncService {
     }
   }
 
+  /// 应用入站标志变更：只更新 `flagsBitmask`，不触碰其它列。
+  ///
+  /// 后端（尤其 IMAP CONDSTORE 增量）在 [SyncResult.updated] 里返回的信封
+  /// 通常只含 `ref` + `flags`（FLAGS-only fetch），不能走全列 upsert，否则会把
+  /// subject/from/date 等覆盖成空值。这里按后端引用定位本地行后仅写标志位。
+  Future<void> _applyFlagUpdates(
+    List<MessageEnvelope> updated,
+    Folder folder,
+    AccountConfig account,
+  ) async {
+    for (final env in updated) {
+      final ref = env.ref;
+      Message? local;
+      if (ref is ImapRef) {
+        local = await _db.messageDao.getByImapUid(folder.id, ref.uid);
+      } else if (ref is GraphRef) {
+        local = await _db.messageDao.getByGraphId(account.id, ref.messageId);
+      }
+      if (local != null) {
+        await _db.messageDao.updateFlags(local.id, _flagsToBitmask(env.flags));
+      }
+    }
+  }
+
+  /// 监听账户收件箱的实时事件（IMAP IDLE）。
+  ///
+  /// 返回 null 表示后端不支持实时或无收件箱。调用前应已 [syncAccount] 过一次，
+  /// 确保后端已连接且文件夹列表就绪（IDLE 需要先选中收件箱）。
+  Future<Stream<MailboxEvent>?> watchAccountInbox(AccountConfig account) async {
+    final backend = await _getBackend(account);
+    if (!backend.supportsIdle) return null;
+    final folders = await _db.folderDao.getFolders(account.id);
+    Folder? inbox;
+    for (final f in folders) {
+      if (f.folderType == FolderType.inbox) {
+        inbox = f;
+        break;
+      }
+    }
+    if (inbox == null) return null;
+    return backend.watch(inbox.toMailboxFolder());
+  }
+
   String _encodeRecipients(List<dynamic> recipients) {
     if (recipients.isEmpty) return '[]';
 
@@ -312,8 +442,197 @@ class SyncService {
     }
   }
 
+  /// 下载并持久化某封邮件的正文与附件元数据（附件字节本身不在此下载）。
+  ///
+  /// 详情页打开邮件时调用：先查本地，缺正文才拉取后端并写入 [MessageBodies]，
+  /// 之后 `MessageDao.watchBody` 会让 UI 自动刷新预览。
+  ///
+  /// 幂等：正文行只在成功下载后写入，故"已存在且非 notDownloaded"即视为已下载，
+  /// 默认跳过；[force] 为 true 时强制重新拉取（手动重试 / 重新下载）。失败向上抛。
+  Future<void> fetchMessageBody(String messageId, {bool force = false}) async {
+    final message = await _db.messageDao.getMessage(messageId);
+    if (message == null) return;
+
+    if (!force) {
+      final existing = await _db.messageDao.getBody(messageId);
+      if (existing != null &&
+          existing.fetchState != BodyFetchState.notDownloaded) {
+        return;
+      }
+    }
+
+    final ref = await _refForMessage(messageId);
+    if (ref == null) {
+      throw Exception('无法定位邮件，无法下载正文');
+    }
+
+    final account = await accountConfigFor(message.accountId);
+    final backend = await _getBackend(account);
+    final content = await backend.fetchMessageContent(ref);
+
+    await _db.messageDao.upsertBody(
+      MessageBodiesCompanion.insert(
+        messageId: messageId,
+        plainText: Value(content.plainText),
+        htmlBody: Value(content.htmlBody),
+        fetchState: Value(
+          content.attachments.isEmpty
+              ? BodyFetchState.full
+              : BodyFetchState.partial,
+        ),
+        attachmentsMeta: Value(
+          jsonEncode([for (final a in content.attachments) a.toJson()]),
+        ),
+        fetchedAt: Value(DateTime.now()),
+      ),
+    );
+  }
+
+  /// 修改邮件的 [flag] 状态：先乐观更新本地 DB，再入队（由下次 [flushOutbox]
+  /// 推送到后端）。UI 必须走这里而不是直接调 [MessageDao.updateFlags]，否则
+  /// 服务端不知道变更，下一次 delta 同步会回滚本地值。
+  Future<void> setMessageFlag(
+    String messageId, {
+    required MessageFlag flag,
+    required bool value,
+  }) async {
+    final message = await _db.messageDao.getMessage(messageId);
+    if (message == null) return;
+
+    final newBitmask = value
+        ? message.flagsBitmask | (1 << flag.index)
+        : message.flagsBitmask & ~(1 << flag.index);
+    if (newBitmask == message.flagsBitmask) return;
+
+    final remoteId = message.graphMessageId ?? message.imapUid?.toString();
+    if (remoteId == null) {
+      // 本地草稿等没有远端引用，仅更新本地。
+      await _db.messageDao.updateFlags(messageId, newBitmask);
+      return;
+    }
+
+    // 与已有相同 (op, messageId) 的待推送条目去重：保留最新意图即可。
+    final opType = _opTypeFor(flag, value);
+    if (opType == null) {
+      await _db.messageDao.updateFlags(messageId, newBitmask);
+      return;
+    }
+
+    await _db.transaction(() async {
+      await _db.messageDao.updateFlags(messageId, newBitmask);
+      await _db.outboxDao.removeForMessage(message.accountId, messageId, flag);
+      await _db.outboxDao.enqueue(
+        OutboxOpsCompanion.insert(
+          accountId: message.accountId,
+          opType: opType,
+          payload: Value(jsonEncode({'messageId': messageId})),
+        ),
+      );
+    });
+  }
+
+  String? _opTypeFor(MessageFlag flag, bool value) {
+    switch (flag) {
+      case MessageFlag.seen:
+        return value ? 'markRead' : 'markUnread';
+      case MessageFlag.flagged:
+        return value ? 'flag' : 'unflag';
+      default:
+        return null; // 其它标志暂不推送。
+    }
+  }
+
+  /// 把账户的 outbox 待推送变更刷到后端。失败的条目保留并累计 attempts。
+  Future<void> flushOutbox(AccountConfig account) async {
+    final pending = await _db.outboxDao.getPendingForAccount(account.id);
+    if (pending.isEmpty) return;
+
+    MailBackend? backend;
+    try {
+      backend = await _getBackend(account);
+    } catch (e) {
+      debugPrint('flushOutbox: 获取后端失败，跳过本轮: $e');
+      return;
+    }
+
+    for (final op in pending) {
+      // 失败次数超过阈值就丢弃，避免坏条目无限阻塞队列。
+      // 5 次大致覆盖临时网络抖动 + 一两次令牌刷新失败的场景。
+      if (op.attempts >= 5) {
+        debugPrint('flushOutbox: ${op.opType} 已重试 ${op.attempts} 次，丢弃');
+        await _db.outboxDao.remove(op.id);
+        continue;
+      }
+
+      try {
+        final payload = jsonDecode(op.payload) as Map<String, dynamic>;
+        final messageId = payload['messageId'] as String?;
+        if (messageId == null) {
+          await _db.outboxDao.remove(op.id);
+          continue;
+        }
+        final ref = await _refForMessage(messageId);
+        if (ref == null) {
+          // 邮件已不存在；丢弃避免无限重试。
+          await _db.outboxDao.remove(op.id);
+          continue;
+        }
+
+        switch (op.opType) {
+          case 'markRead':
+            await backend.markRead([ref], read: true);
+            break;
+          case 'markUnread':
+            await backend.markRead([ref], read: false);
+            break;
+          case 'flag':
+            await backend.markFlagged([ref], flagged: true);
+            break;
+          case 'unflag':
+            await backend.markFlagged([ref], flagged: false);
+            break;
+          default:
+            // 其它类型暂未实现，先丢弃避免阻塞队列。
+            debugPrint('flushOutbox: 未支持的 opType=${op.opType}, 丢弃');
+            await _db.outboxDao.remove(op.id);
+            continue;
+        }
+        await _db.outboxDao.remove(op.id);
+      } catch (e) {
+        debugPrint('flushOutbox: 推送 ${op.opType} 失败: $e');
+        await _db.outboxDao.markFailed(op.id, e.toString());
+      }
+    }
+  }
+
+  Future<MessageRef?> _refForMessage(String messageId) async {
+    final m = await _db.messageDao.getMessage(messageId);
+    if (m == null) return null;
+    if (m.graphMessageId != null) {
+      final folder = await _db.folderDao.getFolder(m.folderId);
+      return GraphRef(
+        messageId: m.graphMessageId!,
+        folderId: folder?.remoteId ?? '',
+      );
+    }
+    if (m.imapUid != null && m.imapUidValidity != null) {
+      final folder = await _db.folderDao.getFolder(m.folderId);
+      if (folder == null) return null;
+      return ImapRef(
+        folderPath: folder.remoteId,
+        uid: m.imapUid!,
+        uidValidity: m.imapUidValidity!,
+      );
+    }
+    return null;
+  }
+
   /// 断开所有后端连接。
   Future<void> dispose() async {
+    for (final t in _syncDebounce.values) {
+      t.cancel();
+    }
+    _syncDebounce.clear();
     for (final backend in _backends.values) {
       await backend.disconnect();
     }
@@ -416,6 +735,9 @@ class SyncService {
     // 处理新增/更新（限制数量）
     final messagesToSync = result.added.take(messageLimit).toList();
     await _persistMessages(messagesToSync, folder);
+
+    // 应用入站标志变更（仅 flags，不覆盖其它列）。
+    await _applyFlagUpdates(result.updated, folder, account);
 
     onProgress?.call(0.9);
 

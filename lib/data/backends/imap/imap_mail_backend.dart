@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:enough_mail/enough_mail.dart' as em;
 
 import '../../../domain/enums/account_enums.dart';
@@ -28,6 +30,12 @@ class ImapMailBackend implements MailBackend {
   final AccessTokenProvider? tokenProvider;
 
   em.MailClient? _client;
+
+  /// uidValidity 变更/首次同步时全量重建拉取的最大封数。
+  static const int _fullResyncLimit = 200;
+
+  /// 增量同步中拉取最新邮件（筛新邮件）的封数上限。
+  static const int _newFetchLimit = 100;
 
   @override
   AccountType get type => account.type;
@@ -105,11 +113,14 @@ class ImapMailBackend implements MailBackend {
         (mb) => mb.path == folder.remoteId,
         orElse: () => throw MailBackendException('文件夹不存在: ${folder.remoteId}'),
       );
-      await client.selectMailbox(mailbox);
+      final selected = await client.selectMailbox(mailbox);
+      final uidValidity = selected.uidValidity ?? 0;
 
       // enough_mail 的 fetchMessages 默认拉取最新 N 封
       final messages = await client.fetchMessages(count: limit);
-      return messages.map((m) => _mapMessage(m, folder)).toList();
+      return messages
+          .map((m) => _mapMessage(m, folder, uidValidity: uidValidity))
+          .toList();
     } on em.MailException catch (e) {
       throw MailBackendException('拉取信封失败: ${e.message}', cause: e);
     }
@@ -164,7 +175,6 @@ class ImapMailBackend implements MailBackend {
     if (client == null) throw const MailBackendException('未连接');
 
     try {
-      // 选择邮箱
       final mailboxes = client.mailboxes;
       if (mailboxes == null) throw const MailBackendException('邮箱列表未加载');
 
@@ -172,13 +182,96 @@ class ImapMailBackend implements MailBackend {
         (mb) => mb.path == folder.remoteId,
         orElse: () => throw MailBackendException('文件夹不存在: ${folder.remoteId}'),
       );
-      await client.selectMailbox(mailbox);
 
-      // 简化：全量拉取最新邮件
-      final messages = await client.fetchMessages(count: 100);
-      final envelopes = messages.map((m) => _mapMessage(m, folder)).toList();
+      // 服务端是否支持 CONDSTORE/QRESYNC，决定能否做 modseq 标志增量。
+      // 不支持时仍可工作：退化为"拉最新 N 封 + upsert 覆盖标志"。
+      var supportsCondStore = false;
+      em.ImapClient? imap;
+      try {
+        imap = client.lowLevelIncomingMailClient as em.ImapClient;
+        supportsCondStore = imap.serverInfo.supports('CONDSTORE') ||
+            imap.serverInfo.supportsQresync;
+      } catch (_) {
+        supportsCondStore = false;
+      }
 
-      return SyncResult(added: envelopes);
+      // 选择邮箱（支持时开 CONDSTORE 以拿到 highestModSequence）。
+      final selected = await client.selectMailbox(
+        mailbox,
+        enableCondStore: supportsCondStore,
+      );
+      final curUidValidity = selected.uidValidity ?? 0;
+      final curUidNext = selected.uidNext ?? 0;
+      final curModSeq = selected.highestModSequence;
+
+      final prev = _ImapSyncCursor.parse(token?.value);
+      final newToken = _ImapSyncCursor(
+        uidValidity: curUidValidity,
+        uidNext: curUidNext,
+        modSeq: curModSeq,
+      ).toToken();
+
+      // 无游标 / uidValidity 变更 → 整文件夹失效，全量重建。
+      if (prev == null || prev.uidValidity != curUidValidity) {
+        final messages = await client.fetchMessages(count: _fullResyncLimit);
+        final added = messages
+            .map((m) => _mapMessage(m, folder, uidValidity: curUidValidity))
+            .toList();
+        return SyncResult(added: added, newToken: newToken);
+      }
+
+      final added = <MessageEnvelope>[];
+      final updated = <MessageEnvelope>[];
+
+      // 1) 新邮件：UID >= 上次 uidNext。取最新 N 封后按 UID 过滤。
+      //    uidNext 未知（0）时也拉一次，保证不漏新邮件（退化为全量覆盖）。
+      if (curUidNext == 0 || curUidNext > prev.uidNext) {
+        final recent = await client.fetchMessages(count: _newFetchLimit);
+        for (final m in recent) {
+          if ((m.uid ?? 0) >= prev.uidNext) {
+            added.add(_mapMessage(m, folder, uidValidity: curUidValidity));
+          }
+        }
+      }
+
+      // 2) 标志变更：CONDSTORE CHANGEDSINCE 只取自上次 modseq 以来变动的 FLAGS。
+      //    仅含 ref+flags，由 SyncService 按 ref 做 flags-only 更新。
+      if (supportsCondStore && imap != null && prev.modSeq != null) {
+        // 直接用底层 ImapClient 发 CHANGEDSINCE FETCH，绕过了 MailClient 的锁；
+        // 若此刻正在 IDLE 轮询，先暂停避免命令流冲突，取完再恢复。
+        final wasPolling = client.isPolling();
+        if (wasPolling) await client.stopPolling();
+        try {
+          final result = await imap.uidFetchMessages(
+            em.MessageSequence.fromAll(),
+            '(UID FLAGS)',
+            changedSinceModSequence: prev.modSeq,
+          );
+          for (final m in result.messages) {
+            final uid = m.uid ?? 0;
+            if (uid == 0 || uid >= prev.uidNext) continue; // 新邮件已走 added
+            updated.add(
+              MessageEnvelope(
+                localId: '',
+                ref: ImapRef(
+                  folderPath: folder.remoteId,
+                  uid: uid,
+                  uidValidity: curUidValidity,
+                ),
+                accountId: account.id,
+                folderId: folder.id,
+                subject: '', // updated 仅用于 flags-only 更新，其余字段不参与持久化
+                date: m.decodeDate() ?? DateTime.fromMillisecondsSinceEpoch(0),
+                flags: _mapFlags(m.flags),
+              ),
+            );
+          }
+        } finally {
+          if (wasPolling) await client.startPolling();
+        }
+      }
+
+      return SyncResult(added: added, updated: updated, newToken: newToken);
     } on em.MailException catch (e) {
       throw MailBackendException('同步失败: ${e.message}', cause: e);
     }
@@ -191,24 +284,23 @@ class ImapMailBackend implements MailBackend {
 
     for (final ref in refs) {
       if (ref is! ImapRef) continue;
-      try {
-        // 选择邮箱
-        final mailboxes = client.mailboxes;
-        if (mailboxes == null) continue;
+      final mailboxes = client.mailboxes;
+      if (mailboxes == null) {
+        throw const MailBackendException('邮箱列表未加载');
+      }
 
-        final mailbox = mailboxes.firstWhere(
-          (mb) => mb.path == ref.folderPath,
-          orElse: () => throw MailBackendException('文件夹不存在: ${ref.folderPath}'),
-        );
-        await client.selectMailbox(mailbox);
+      final mailbox = mailboxes.firstWhere(
+        (mb) => mb.path == ref.folderPath,
+        orElse: () => throw MailBackendException('文件夹不存在: ${ref.folderPath}'),
+      );
+      await client.selectMailbox(mailbox);
 
-        final sequence = em.MessageSequence.fromId(ref.uid, isUid: true);
-        if (read) {
-          await client.store(sequence, [em.MessageFlags.seen], action: em.StoreAction.add);
-        } else {
-          await client.markUnseen(sequence);
-        }
-      } catch (_) {}
+      final sequence = em.MessageSequence.fromId(ref.uid, isUid: true);
+      if (read) {
+        await client.store(sequence, [em.MessageFlags.seen], action: em.StoreAction.add);
+      } else {
+        await client.markUnseen(sequence);
+      }
     }
   }
 
@@ -219,24 +311,23 @@ class ImapMailBackend implements MailBackend {
 
     for (final ref in refs) {
       if (ref is! ImapRef) continue;
-      try {
-        // 选择邮箱
-        final mailboxes = client.mailboxes;
-        if (mailboxes == null) continue;
+      final mailboxes = client.mailboxes;
+      if (mailboxes == null) {
+        throw const MailBackendException('邮箱列表未加载');
+      }
 
-        final mailbox = mailboxes.firstWhere(
-          (mb) => mb.path == ref.folderPath,
-          orElse: () => throw MailBackendException('文件夹不存在: ${ref.folderPath}'),
-        );
-        await client.selectMailbox(mailbox);
+      final mailbox = mailboxes.firstWhere(
+        (mb) => mb.path == ref.folderPath,
+        orElse: () => throw MailBackendException('文件夹不存在: ${ref.folderPath}'),
+      );
+      await client.selectMailbox(mailbox);
 
-        final sequence = em.MessageSequence.fromId(ref.uid, isUid: true);
-        if (flagged) {
-          await client.store(sequence, [em.MessageFlags.flagged], action: em.StoreAction.add);
-        } else {
-          await client.markUnflagged(sequence);
-        }
-      } catch (_) {}
+      final sequence = em.MessageSequence.fromId(ref.uid, isUid: true);
+      if (flagged) {
+        await client.store(sequence, [em.MessageFlags.flagged], action: em.StoreAction.add);
+      } else {
+        await client.markUnflagged(sequence);
+      }
     }
   }
 
@@ -270,26 +361,68 @@ class ImapMailBackend implements MailBackend {
   }
 
   @override
-  Stream<MailboxEvent> watch(MailboxFolder folder) async* {
+  Stream<MailboxEvent> watch(MailboxFolder folder) {
     final client = _client;
     if (client == null) throw const MailBackendException('未连接');
 
-    // 简化：轮询而非真 IDLE（真 IDLE 需要底层 ImapClient + startPolling）
-    // 生产环境应使用 client.startPolling() 并映射事件
-    yield* Stream.periodic(const Duration(seconds: 30), (_) async {
-      // 选择邮箱
+    // 真 IDLE：MailClient.startPolling() 在服务端支持时使用 IMAP IDLE，
+    // 通过 eventBus 派发新邮件/标志变更/过期/重连事件，映射到 MailboxEvent。
+    final controller = StreamController<MailboxEvent>();
+    final subs = <StreamSubscription<dynamic>>[];
+
+    Future<void> startIdle() async {
       final mailboxes = client.mailboxes;
       if (mailboxes == null) throw const MailBackendException('邮箱列表未加载');
-
       final mailbox = mailboxes.firstWhere(
         (mb) => mb.path == folder.remoteId,
         orElse: () => throw MailBackendException('文件夹不存在: ${folder.remoteId}'),
       );
-      await client.selectMailbox(mailbox);
+      final selected = await client.selectMailbox(mailbox);
+      final uidValidity = selected.uidValidity ?? 0;
 
-      final messages = await client.fetchMessages(count: 20);
-      return MailArrivedEvent(messages.map((m) => _mapMessage(m, folder)).toList());
-    }).asyncMap((event) => event);
+      subs.add(client.eventBus.on<em.MailLoadEvent>().listen((e) {
+        controller.add(
+          MailArrivedEvent(
+            [_mapMessage(e.message, folder, uidValidity: uidValidity)],
+          ),
+        );
+      }));
+      subs.add(client.eventBus.on<em.MailUpdateEvent>().listen((e) {
+        controller.add(
+          MailUpdatedEvent(
+            [_mapMessage(e.message, folder, uidValidity: uidValidity)],
+          ),
+        );
+      }));
+      subs.add(client.eventBus.on<em.MailVanishedEvent>().listen((_) {
+        // expunge 序列难直接映射 UID，发文件夹变更让上层做一次重同步。
+        controller.add(FolderChangedEvent(folder));
+      }));
+      subs.add(client.eventBus
+          .on<em.MailConnectionReEstablishedEvent>()
+          .listen((_) {
+        // 断线重连期间可能漏掉变更，触发一次重同步兜底。
+        controller.add(FolderChangedEvent(folder));
+      }));
+
+      await client.startPolling();
+    }
+
+    controller
+      ..onListen = () {
+        startIdle().catchError(controller.addError);
+      }
+      ..onCancel = () async {
+        for (final s in subs) {
+          await s.cancel();
+        }
+        subs.clear();
+        try {
+          await client.stopPollingIfNeeded();
+        } catch (_) {}
+      };
+
+    return controller.stream;
   }
 
   MailboxFolder _mapMailbox(em.Mailbox mb) {
@@ -314,11 +447,12 @@ class ImapMailBackend implements MailBackend {
     return FolderType.custom;
   }
 
-  MessageEnvelope _mapMessage(em.MimeMessage msg, MailboxFolder folder) {
+  MessageEnvelope _mapMessage(
+    em.MimeMessage msg,
+    MailboxFolder folder, {
+    int uidValidity = 0,
+  }) {
     final uid = msg.uid ?? 0;
-    // uidValidity 来自 Mailbox，不是 MimeMessage
-    // 简化：使用 0 作为占位符，生产环境应从 _client?.selectedMailbox?.uidValidity 获取
-    final uidValidity = 0;
 
     return MessageEnvelope(
       localId: '', // 由仓储层填充
@@ -385,5 +519,54 @@ class ImapMailBackend implements MailBackend {
       case SocketType.plain:
         return em.SocketType.plain;
     }
+  }
+}
+
+/// IMAP 增量游标，序列化进不透明 [SyncToken]：`uidvalidity=..;uidnext=..;modseq=..`。
+/// 与 [sync_types.dart] 中 SyncToken 的文档约定一致（IMAP: 序列化的 uidNext/modseq）。
+class _ImapSyncCursor {
+  const _ImapSyncCursor({
+    required this.uidValidity,
+    required this.uidNext,
+    this.modSeq,
+  });
+
+  final int uidValidity;
+  final int uidNext;
+  final int? modSeq;
+
+  static _ImapSyncCursor? parse(String? value) {
+    if (value == null || value.isEmpty) return null;
+    int? uidValidity;
+    int? uidNext;
+    int? modSeq;
+    for (final part in value.split(';')) {
+      final i = part.indexOf('=');
+      if (i <= 0) continue;
+      final key = part.substring(0, i);
+      final v = int.tryParse(part.substring(i + 1));
+      switch (key) {
+        case 'uidvalidity':
+          uidValidity = v;
+          break;
+        case 'uidnext':
+          uidNext = v;
+          break;
+        case 'modseq':
+          modSeq = v;
+          break;
+      }
+    }
+    if (uidValidity == null || uidNext == null) return null;
+    return _ImapSyncCursor(
+      uidValidity: uidValidity,
+      uidNext: uidNext,
+      modSeq: modSeq,
+    );
+  }
+
+  SyncToken toToken() {
+    final modSeqPart = modSeq != null ? ';modseq=$modSeq' : '';
+    return SyncToken('uidvalidity=$uidValidity;uidnext=$uidNext$modSeqPart');
   }
 }

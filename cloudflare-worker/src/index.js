@@ -82,14 +82,6 @@ async function handleWebhook(request, env) {
 
     console.log(`Processing notification: ${changeType} for ${resource}`);
 
-    // 只对“新邮件到达”发通知。邮件到达后 Graph 还会连发多条 updated
-    // （重点收件箱分类、垃圾判定、已读/分类标记等服务端处理），全部推送会
-    // 让一封邮件炸出近 10 条通知。已读/删除等跨设备状态由 App 增量同步兜底。
-    if (changeType !== 'created') {
-      console.log(`Skip non-created change: ${changeType}`);
-      continue;
-    }
-
     // 从 subscriptionId 获取用户信息
     const subscription = await env.KV.get(`subscription:${subscriptionId}`, 'json');
 
@@ -106,18 +98,6 @@ async function handleWebhook(request, env) {
       continue;
     }
 
-    // 去重：Graph 是 at-least-once 投递，同一封邮件可能被重投多次。
-    // 用 messageId 在 KV 里记一个短期标记，命中则跳过。
-    const messageId = resourceData?.id;
-    if (messageId) {
-      const dedupKey = `seen:${accountId}:${messageId}`;
-      if (await env.KV.get(dedupKey)) {
-        console.log(`Duplicate notification skipped: ${messageId}`);
-        continue;
-      }
-      await env.KV.put(dedupKey, '1', { expirationTtl: 600 }); // 10 分钟去重窗口
-    }
-
     // 获取用户的 FCM token
     const fcmToken = await env.KV.get(`fcm:${userId}:${accountId}`);
 
@@ -126,34 +106,69 @@ async function handleWebhook(request, env) {
       continue;
     }
 
-    // 解密富通知内容拿到主题/发件人；未配置加密或解密失败则回退通用文案。
-    let title = '新邮件';
-    let body = '您有新邮件';
-    if (notification.encryptedContent && env.ENCRYPTION_PRIVATE_KEY) {
-      try {
-        const message = await decryptResourceData(notification.encryptedContent, env);
-        const fromAddr = message?.from?.emailAddress;
-        title = fromAddr?.name || fromAddr?.address || title;
-        body = message?.subject || message?.bodyPreview || body;
-      } catch (error) {
-        console.error('Failed to decrypt resource data:', error);
+    if (changeType === 'created') {
+      // 新邮件到达 → 通知消息（系统托盘可见）。
+      // 去重：Graph 是 at-least-once 投递，同一封邮件可能被重投多次。
+      const messageId = resourceData?.id;
+      if (messageId) {
+        const dedupKey = `seen:${accountId}:${messageId}`;
+        if (await env.KV.get(dedupKey)) {
+          console.log(`Duplicate created skipped: ${messageId}`);
+          continue;
+        }
+        await env.KV.put(dedupKey, '1', { expirationTtl: 600 }); // 10 分钟去重窗口
       }
-    }
 
-    // 发送推送通知
-    try {
-      await sendFCMNotification(fcmToken, {
-        title,
-        body,
-        changeType,
-        resource,
-        messageId: messageId || '',
-        accountId,
-      }, env);
+      // 解密富通知内容拿到主题/发件人；未配置加密或解密失败则回退通用文案。
+      let title = '新邮件';
+      let body = '您有新邮件';
+      if (notification.encryptedContent && env.ENCRYPTION_PRIVATE_KEY) {
+        try {
+          const message = await decryptResourceData(notification.encryptedContent, env);
+          const fromAddr = message?.from?.emailAddress;
+          title = fromAddr?.name || fromAddr?.address || title;
+          body = message?.subject || message?.bodyPreview || body;
+        } catch (error) {
+          console.error('Failed to decrypt resource data:', error);
+        }
+      }
 
-      console.log(`FCM notification sent to user: ${userId}`);
-    } catch (error) {
-      console.error('Failed to send FCM:', error);
+      try {
+        await sendFCMMessage(fcmToken, {
+          silent: false,
+          title,
+          body,
+          changeType,
+          resource,
+          messageId: messageId || '',
+          accountId,
+        }, env);
+        console.log(`FCM notification sent to user: ${userId}`);
+      } catch (error) {
+        console.error('Failed to send FCM:', error);
+      }
+    } else {
+      // 已读/标志/分类等变更（updated 等）→ 静默数据消息：仅触发 App 增量同步，
+      // 不在系统托盘显示，避免一封邮件引发的多条 updated 轰炸用户。
+      // 按账户短窗去重，把一阵 updated 合并成一次推送（客户端还会再去抖）。
+      const dedupKey = `upd:${accountId}`;
+      if (await env.KV.get(dedupKey)) {
+        console.log(`Coalesced updated for account: ${accountId}`);
+        continue;
+      }
+      await env.KV.put(dedupKey, '1', { expirationTtl: 10 }); // 10 秒合并窗口
+
+      try {
+        await sendFCMMessage(fcmToken, {
+          silent: true,
+          changeType,
+          resource,
+          accountId,
+        }, env);
+        console.log(`FCM silent data message sent to user: ${userId}`);
+      } catch (error) {
+        console.error('Failed to send FCM (silent):', error);
+      }
     }
   }
 
@@ -186,9 +201,10 @@ async function handleSubscribe(request, env) {
   // 生成唯一的 clientState
   const clientState = crypto.randomUUID();
 
-  // 订阅配置。只订阅 created：新邮件到达才推送（避免 updated 高频通知）。
+  // 订阅配置。
+  // created：新邮件 → 通知消息；updated：已读/标志/分类等 → 静默数据消息（仅触发同步）。
   const subscription = {
-    changeType: 'created',
+    changeType: 'created,updated',
     notificationUrl: `${env.WORKER_URL}/webhook`,
     resource: resource || '/me/mailFolders(\'Inbox\')/messages',
     expirationDateTime: getExpirationDate(3), // 3 天后过期
@@ -367,13 +383,47 @@ async function handleUnregisterFCM(request, env) {
   return jsonResponse({ success: true });
 }
 
-// 发送 FCM 推送通知（使用 FCM HTTP v1 API）
-async function sendFCMNotification(token, data, env) {
+// 发送 FCM 消息（FCM HTTP v1 API）。
+// data.silent=true：只发 data 消息（无 notification 块）——客户端静默触发同步、
+//   不在系统托盘显示（用于 updated 等已读/标志变更）。
+// data.silent=false：notification+data（新邮件托盘通知）。
+async function sendFCMMessage(token, data, env) {
   // 1. 获取 OAuth 2.0 access token
   const accessToken = await getFirebaseAccessToken(env);
 
-  // 2. 发送推送通知
+  // 2. 组装消息
   const projectId = env.FIREBASE_PROJECT_ID;
+  const message = {
+    token: token,
+    data: {
+      changeType: data.changeType || '',
+      resource: data.resource || '',
+      messageId: data.messageId || '',
+      accountId: data.accountId || '',
+      silent: data.silent ? 'true' : 'false',
+      click_action: 'FLUTTER_NOTIFICATION_CLICK',
+    },
+    android: {
+      // 数据消息也用 high 优先级，尽量在后台/doze 唤醒以触发同步（尽力而为）。
+      priority: 'high',
+    },
+  };
+
+  if (!data.silent) {
+    message.notification = {
+      title: data.title || '新邮件',
+      body: data.body || '您有新邮件',
+    };
+    message.android.notification = {
+      // 指定 channel：必须和客户端 Manifest meta-data + Dart 端创建的 channel 一致，
+      // 否则 Android 8+ 会拒绝显示（"unknown channel"）。
+      channel_id: 'everyemail_default',
+      sound: 'default',
+      // 不指定 icon：让 Android 回退到 application launcher icon。
+    };
+  }
+
+  // 3. 发送
   const response = await fetch(
     `https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`,
     {
@@ -382,33 +432,7 @@ async function sendFCMNotification(token, data, env) {
         'Authorization': `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        message: {
-          token: token,
-          notification: {
-            title: data.title || '新邮件',
-            body: data.body || '您有新邮件',
-          },
-          data: {
-            changeType: data.changeType,
-            resource: data.resource,
-            messageId: data.messageId || '',
-            accountId: data.accountId,
-            click_action: 'FLUTTER_NOTIFICATION_CLICK',
-          },
-          android: {
-            priority: 'high',
-            notification: {
-              // 指定 channel：必须和客户端 Manifest meta-data + Dart 端创建的 channel 一致，
-              // 否则 Android 8+ 会拒绝显示（"unknown channel"）。
-              channel_id: 'everyemail_default',
-              sound: 'default',
-              // 不指定 icon：让 Android 回退到 application launcher icon。
-              // 之前指定 'ic_notification' 但 res/ 里没有这个 drawable，FCM 会静默丢弃通知。
-            },
-          },
-        },
-      }),
+      body: JSON.stringify({ message }),
     }
   );
 

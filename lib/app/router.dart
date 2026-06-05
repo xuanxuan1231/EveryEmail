@@ -2,9 +2,11 @@ import 'package:go_router/go_router.dart';
 
 import '../domain/enums/account_enums.dart';
 import '../domain/models/account_config.dart';
+import '../data/local/database/app_database.dart';
 import '../features/home/home_page.dart';
 import '../features/message/message_detail_page.dart';
 import '../features/search/search_page.dart';
+import '../features/settings/settings_page.dart';
 import '../features/onboarding/add_account_page.dart';
 import '../features/onboarding/manual_setup_page.dart';
 import '../features/onboarding/oauth_page.dart';
@@ -15,24 +17,30 @@ import '../features/onboarding/sync_config_page.dart';
 final GoRouter appRouter = GoRouter(
   initialLocation: '/',
   routes: <RouteBase>[
-    GoRoute(
-      path: '/',
-      builder: (context, state) => const HomePage(),
-    ),
+    GoRoute(path: '/', builder: (context, state) => const HomePage()),
 
     // 邮件详情
     GoRoute(
       path: '/message/:id',
       builder: (context, state) {
         final messageId = state.pathParameters['id']!;
-        return MessageDetailPage(messageId: messageId);
+        final initialMessage = state.extra is Message
+            ? state.extra! as Message
+            : null;
+        return MessageDetailPage(
+          messageId: messageId,
+          initialMessage: initialMessage,
+        );
       },
     ),
 
     // 搜索
+    GoRoute(path: '/search', builder: (context, state) => const SearchPage()),
+
+    // 设置
     GoRoute(
-      path: '/search',
-      builder: (context, state) => const SearchPage(),
+      path: '/settings',
+      builder: (context, state) => const SettingsPage(),
     ),
 
     // 账户向导
@@ -75,11 +83,15 @@ final GoRouter appRouter = GoRouter(
       builder: (context, state) {
         final email = state.uri.queryParameters['email'] ?? '';
         final imapHost = state.uri.queryParameters['imapHost'] ?? '';
-        final imapPort = int.tryParse(state.uri.queryParameters['imapPort'] ?? '') ?? 993;
-        final imapSocketType = state.uri.queryParameters['imapSocketType'] ?? 'ssl';
+        final imapPort =
+            int.tryParse(state.uri.queryParameters['imapPort'] ?? '') ?? 993;
+        final imapSocketType =
+            state.uri.queryParameters['imapSocketType'] ?? 'ssl';
         final smtpHost = state.uri.queryParameters['smtpHost'];
-        final smtpPort = int.tryParse(state.uri.queryParameters['smtpPort'] ?? '') ?? 465;
-        final smtpSocketType = state.uri.queryParameters['smtpSocketType'] ?? 'ssl';
+        final smtpPort =
+            int.tryParse(state.uri.queryParameters['smtpPort'] ?? '') ?? 465;
+        final smtpSocketType =
+            state.uri.queryParameters['smtpSocketType'] ?? 'ssl';
 
         return PasswordPage(
           email: email,

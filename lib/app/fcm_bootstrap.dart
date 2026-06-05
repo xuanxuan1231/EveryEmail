@@ -17,8 +17,9 @@ const String kDefaultChannelId = 'everyemail_default';
 /// FCM 初始化的后台消息处理器。
 ///
 /// 注意：后台 isolate 没有 Riverpod 容器，这里只做最小处理。
-/// 当 payload 含 `notification` 块时，应用在后台/被杀时由系统托盘自动显示，
-/// 无需在这里手动弹；增量同步交给进程下次启动时统一拉起。
+/// - created 通知消息：应用在后台/被杀时由系统托盘自动显示，无需手动弹。
+/// - updated 静默数据消息：后台不弹通知（符合预期）；完整增量同步交给下次回前台时
+///   由 RealtimeSyncCoordinator 的 resume 兜底同步统一拉起（保证级后台同步需平台后台任务）。
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
@@ -97,11 +98,17 @@ class _FcmBootstrapState extends ConsumerState<FcmBootstrap> {
         unawaited(manager.registerFcmTokenForAllMicrosoftAccounts(newToken));
       });
 
-      // 6. 前台收到推送：FCM 在前台**不会**自动弹系统通知，必须自己弹；
-      //    同时触发增量同步。
+      // 6. 前台收到推送：
+      //    - 新邮件（notification 消息）：FCM 前台**不会**自动弹托盘，需手动弹 + 同步。
+      //    - 静默数据消息（updated 已读/标志变更）：不弹通知，仅触发增量同步。
       _foregroundSub = FirebaseMessaging.onMessage.listen((message) {
         debugPrint('前台消息: ${message.messageId} data=${message.data}');
-        _showLocalNotification(message);
+        final isSilent =
+            message.notification == null || message.data['silent'] == 'true';
+        if (!isSilent) {
+          _showLocalNotification(message);
+        }
+        // 不论是否静默都触发同步——静默数据消息正是为触发同步而来。
         unawaited(manager.handlePushNotification(message.data));
       });
 

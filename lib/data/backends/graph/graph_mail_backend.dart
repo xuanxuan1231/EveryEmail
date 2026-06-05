@@ -287,12 +287,10 @@ class GraphMailBackend implements MailBackend {
   Future<void> markRead(List<MessageRef> refs, {required bool read}) async {
     for (final ref in refs) {
       if (ref is! GraphRef) continue;
-      try {
-        await _dio.patch(
-          '/me/messages/${ref.messageId}',
-          data: {'isRead': read},
-        );
-      } catch (_) {}
+      await _dio.patch(
+        '/me/messages/${ref.messageId}',
+        data: {'isRead': read},
+      );
     }
   }
 
@@ -300,14 +298,12 @@ class GraphMailBackend implements MailBackend {
   Future<void> markFlagged(List<MessageRef> refs, {required bool flagged}) async {
     for (final ref in refs) {
       if (ref is! GraphRef) continue;
-      try {
-        await _dio.patch(
-          '/me/messages/${ref.messageId}',
-          data: {
-            'flag': {'flagStatus': flagged ? 'flagged' : 'notFlagged'}
-          },
-        );
-      } catch (_) {}
+      await _dio.patch(
+        '/me/messages/${ref.messageId}',
+        data: {
+          'flag': {'flagStatus': flagged ? 'flagged' : 'notFlagged'}
+        },
+      );
     }
   }
 
