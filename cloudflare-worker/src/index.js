@@ -1,6 +1,15 @@
 // Cloudflare Worker for Microsoft Graph Webhooks
 // 接收 Graph API 的 webhook 通知并推送到移动应用
 
+// Outlook message subscriptions have a max expiration below 72 hours
+// (commonly 4230 minutes). Use 4200 minutes to leave validation headroom.
+const OUTLOOK_SUBSCRIPTION_EXPIRATION_MINUTES = 4200;
+const SUBSCRIPTION_KV_TTL_SECONDS = 259200; // 3 days; keeps metadata through the renewal window.
+const KV_MIN_EXPIRATION_TTL_SECONDS = 60;
+const UPDATED_COALESCE_WINDOW_SECONDS = 10;
+const DEFAULT_MESSAGE_SUBSCRIPTION_RESOURCE = "/me/mailFolders('Inbox')/messages";
+const RICH_NOTIFICATION_SELECT = 'id,subject,from,bodyPreview';
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -127,7 +136,7 @@ async function handleWebhook(request, env) {
           const message = await decryptResourceData(notification.encryptedContent, env);
           const fromAddr = message?.from?.emailAddress;
           title = fromAddr?.name || fromAddr?.address || title;
-          body = message?.subject || message?.bodyPreview || body;
+          body = buildNotificationBody(message?.subject, message?.bodyPreview) || body;
         } catch (error) {
           console.error('Failed to decrypt resource data:', error);
         }
@@ -152,11 +161,18 @@ async function handleWebhook(request, env) {
       // 不在系统托盘显示，避免一封邮件引发的多条 updated 轰炸用户。
       // 按账户短窗去重，把一阵 updated 合并成一次推送（客户端还会再去抖）。
       const dedupKey = `upd:${accountId}`;
-      if (await env.KV.get(dedupKey)) {
+      const now = Date.now();
+      const lastUpdatedAt = Number(await env.KV.get(dedupKey));
+      if (
+        Number.isFinite(lastUpdatedAt) &&
+        now - lastUpdatedAt < UPDATED_COALESCE_WINDOW_SECONDS * 1000
+      ) {
         console.log(`Coalesced updated for account: ${accountId}`);
         continue;
       }
-      await env.KV.put(dedupKey, '1', { expirationTtl: 10 }); // 10 秒合并窗口
+      await env.KV.put(dedupKey, String(now), {
+        expirationTtl: KV_MIN_EXPIRATION_TTL_SECONDS,
+      }); // KV 最小 TTL 为 60 秒，实际合并窗口由时间戳判断保持 10 秒。
 
       try {
         await sendFCMMessage(fcmToken, {
@@ -203,17 +219,20 @@ async function handleSubscribe(request, env) {
 
   // 订阅配置。
   // created：新邮件 → 通知消息；updated：已读/标志/分类等 → 静默数据消息（仅触发同步）。
+  const includeResourceData = Boolean(
+    env.ENCRYPTION_CERTIFICATE && env.ENCRYPTION_CERTIFICATE_ID
+  );
   const subscription = {
     changeType: 'created,updated',
     notificationUrl: `${env.WORKER_URL}/webhook`,
-    resource: resource || '/me/mailFolders(\'Inbox\')/messages',
-    expirationDateTime: getExpirationDate(3), // 3 天后过期
+    resource: buildSubscriptionResource(resource, includeResourceData),
+    expirationDateTime: getSubscriptionExpirationDate(),
     clientState: clientState,
   };
 
   // 配置了加密证书时开启富通知：Graph 把邮件主题/发件人加密塞进 webhook，
   // Worker 解密后填进通知。未配置则降级为通用文案，推送仍可用。
-  if (env.ENCRYPTION_CERTIFICATE && env.ENCRYPTION_CERTIFICATE_ID) {
+  if (includeResourceData) {
     subscription.includeResourceData = true;
     subscription.encryptionCertificate = env.ENCRYPTION_CERTIFICATE;
     subscription.encryptionCertificateId = env.ENCRYPTION_CERTIFICATE_ID;
@@ -251,7 +270,7 @@ async function handleSubscribe(request, env) {
       expirationDateTime: result.expirationDateTime,
       createdAt: Date.now(),
     }),
-    { expirationTtl: 259200 } // 3 天
+    { expirationTtl: SUBSCRIPTION_KV_TTL_SECONDS }
   );
 
   // 保存用户的订阅列表
@@ -276,8 +295,7 @@ async function handleRenew(request, env) {
     return jsonResponse({ error: 'Missing required fields' }, 400);
   }
 
-  // 续订 3 天
-  const expirationDateTime = getExpirationDate(3);
+  const expirationDateTime = getSubscriptionExpirationDate();
 
   const response = await fetch(`https://graph.microsoft.com/v1.0/subscriptions/${subscriptionId}`, {
     method: 'PATCH',
@@ -303,7 +321,7 @@ async function handleRenew(request, env) {
     await env.KV.put(
       `subscription:${subscriptionId}`,
       JSON.stringify(subscription),
-      { expirationTtl: 259200 }
+      { expirationTtl: SUBSCRIPTION_KV_TTL_SECONDS }
     );
   }
 
@@ -554,11 +572,42 @@ async function importPrivateKey(pem) {
   );
 }
 
-// 工具函数：获取过期时间
-function getExpirationDate(days) {
-  const date = new Date();
-  date.setDate(date.getDate() + days);
+// 工具函数：获取 Outlook message subscription 过期时间
+function getSubscriptionExpirationDate() {
+  const date = new Date(
+    Date.now() + OUTLOOK_SUBSCRIPTION_EXPIRATION_MINUTES * 60 * 1000
+  );
   return date.toISOString();
+}
+
+// 富通知必须显式声明要随 encryptedContent 下发的字段。
+function buildSubscriptionResource(resource, includeResourceData) {
+  const baseResource = resource || DEFAULT_MESSAGE_SUBSCRIPTION_RESOURCE;
+  if (!includeResourceData) {
+    return baseResource;
+  }
+
+  if (/(?:[?&](?:\$select|%24select)=)/i.test(baseResource)) {
+    return baseResource;
+  }
+
+  const separator = baseResource.includes('?') ? '&' : '?';
+  return `${baseResource}${separator}$select=${RICH_NOTIFICATION_SELECT}`;
+}
+
+function buildNotificationBody(subject, bodyPreview) {
+  const normalizedSubject = typeof subject === 'string' ? subject.trim() : '';
+  const normalizedPreview =
+    typeof bodyPreview === 'string' ? bodyPreview.trim() : '';
+
+  if (normalizedSubject && normalizedPreview) {
+    if (normalizedPreview === normalizedSubject) {
+      return normalizedSubject;
+    }
+    return `${normalizedSubject}\n${normalizedPreview}`;
+  }
+
+  return normalizedSubject || normalizedPreview;
 }
 
 // 工具函数：JSON 响应

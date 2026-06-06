@@ -19,22 +19,37 @@ part 'app_database.g.dart';
   daos: [AccountDao, FolderDao, MessageDao, OutboxDao],
 )
 class AppDatabase extends _$AppDatabase {
-  AppDatabase([QueryExecutor? executor])
-      : super(executor ?? _openConnection());
+  AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
   int get schemaVersion => 1;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
-        beforeOpen: (details) async {
-          // SQLite 默认不启用外键约束；开启后级联删除（账户→文件夹→邮件）才生效。
-          await customStatement('PRAGMA foreign_keys = ON');
-        },
-      );
+    beforeOpen: (details) async {
+      // SQLite 默认不启用外键约束；开启后级联删除（账户→文件夹→邮件）才生效。
+      await customStatement('PRAGMA foreign_keys = ON');
+      await _ensurePerformanceIndexes();
+    },
+  );
 
   /// 默认连接：应用文档目录下的 everyemail.sqlite。
   static QueryExecutor _openConnection() {
     return driftDatabase(name: 'everyemail');
+  }
+
+  Future<void> _ensurePerformanceIndexes() async {
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_messages_folder_date '
+      'ON messages(folder_id, date DESC)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_messages_account_date '
+      'ON messages(account_id, date DESC)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_folders_type_account '
+      'ON folders(folder_type, account_id)',
+    );
   }
 }

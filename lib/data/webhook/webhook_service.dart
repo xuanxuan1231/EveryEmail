@@ -49,7 +49,7 @@ class WebhookService {
     } on DioException catch (e) {
       return SubscriptionResult(
         success: false,
-        error: e.message ?? 'Failed to create subscription',
+        error: _dioErrorMessage(e, 'Failed to create subscription'),
       );
     }
   }
@@ -81,7 +81,7 @@ class WebhookService {
     } on DioException catch (e) {
       return SubscriptionResult(
         success: false,
-        error: e.message ?? 'Failed to renew subscription',
+        error: _dioErrorMessage(e, 'Failed to renew subscription'),
       );
     }
   }
@@ -103,7 +103,9 @@ class WebhookService {
       );
       return true;
     } on DioException catch (e) {
-      print('Failed to delete subscription: ${e.message}');
+      print(
+        'Failed to delete subscription: ${_dioErrorMessage(e, 'Failed to delete subscription')}',
+      );
       return false;
     }
   }
@@ -127,7 +129,9 @@ class WebhookService {
       );
       return true;
     } on DioException catch (e) {
-      print('Failed to register FCM token: ${e.message}');
+      print(
+        'Failed to register FCM token: ${_dioErrorMessage(e, 'Failed to register FCM token')}',
+      );
       return false;
     }
   }
@@ -149,7 +153,9 @@ class WebhookService {
       );
       return true;
     } on DioException catch (e) {
-      print('Failed to unregister FCM token: ${e.message}');
+      print(
+        'Failed to unregister FCM token: ${_dioErrorMessage(e, 'Failed to unregister FCM token')}',
+      );
       return false;
     }
   }
@@ -162,6 +168,32 @@ class WebhookService {
     } catch (e) {
       return false;
     }
+  }
+
+  String _dioErrorMessage(DioException e, String fallback) {
+    final response = e.response;
+    if (response == null) {
+      return e.message ?? fallback;
+    }
+
+    final data = response.data;
+    if (data is Map) {
+      final details = data['details'];
+      if (details != null && details.toString().isNotEmpty) {
+        return details.toString();
+      }
+
+      final error = data['error'];
+      if (error != null && error.toString().isNotEmpty) {
+        return error.toString();
+      }
+    }
+
+    if (data != null && data.toString().isNotEmpty) {
+      return data.toString();
+    }
+
+    return e.message ?? fallback;
   }
 }
 

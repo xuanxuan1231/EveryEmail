@@ -1,16 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_widget_from_html_core/flutter_widget_from_html_core.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../app/providers.dart';
+import '../../core/navigation/predictive_back_shared_element.dart';
 import '../../data/local/database/app_database.dart';
 import '../../domain/enums/message_enums.dart';
 import '../../domain/models/mail_attachment.dart';
 import '../../domain/models/mail_recipient.dart';
+import '../home/widgets/gmail_mobile_message_item.dart';
 import 'widgets/attachment_list.dart';
 import 'widgets/folder_picker_dialog.dart';
+import 'widgets/message_html_view.dart';
 import 'widgets/recipient_section.dart';
 
 /// 邮件详情页面（独立路由）。
@@ -36,8 +38,54 @@ class MessageDetailPage extends ConsumerStatefulWidget {
 
 class _MessageDetailPageState extends ConsumerState<MessageDetailPage> {
   bool _autoMarkReadDone = false;
+  String? _registeredSharedElementId;
 
   String get messageId => widget.messageId;
+
+  @override
+  void initState() {
+    super.initState();
+    final initialMessage = widget.initialMessage;
+    if (initialMessage != null && initialMessage.id == messageId) {
+      _registerReturnPreview(initialMessage);
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant MessageDetailPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.messageId != widget.messageId) {
+      _clearReturnPreview();
+      final initialMessage = widget.initialMessage;
+      if (initialMessage != null && initialMessage.id == messageId) {
+        _registerReturnPreview(initialMessage);
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _clearReturnPreview();
+    super.dispose();
+  }
+
+  void _registerReturnPreview(Message message) {
+    _registeredSharedElementId = message.id;
+    PredictiveBackSharedElementRegistry.instance.setActive(
+      id: message.id,
+      previewBuilder: (context) => GmailMobileMessageCardContent(
+        message: message,
+        showAccountLabel: false,
+      ),
+    );
+  }
+
+  void _clearReturnPreview() {
+    final id = _registeredSharedElementId;
+    if (id == null) return;
+    PredictiveBackSharedElementRegistry.instance.clearActive(id);
+    _registeredSharedElementId = null;
+  }
 
   /// 打开邮件即标记为已读：通过 SyncService 走 outbox，下一次同步会推送到服务端。
   /// 这里不阻塞 UI；失败也不弹错（最终一致即可）。
@@ -63,7 +111,7 @@ class _MessageDetailPageState extends ConsumerState<MessageDetailPage> {
     final theme = Theme.of(context);
     final db = ref.watch(databaseProvider);
 
-    return Scaffold(
+    final scaffold = Scaffold(
       appBar: AppBar(
         actions: [
           IconButton(
@@ -311,11 +359,13 @@ class _MessageDetailPageState extends ConsumerState<MessageDetailPage> {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             _ensureMarkedRead(message);
           });
+          _registerReturnPreview(message);
 
           return _MessageContent(message: message);
         },
       ),
     );
+    return scaffold;
   }
 }
 
@@ -409,7 +459,7 @@ class _MessageContent extends StatelessWidget {
           const Divider(height: 32),
 
           // 邮件正文与附件：打开即自动下载，下载完成后响应式预览。
-          _MessageBody(message: message),
+          _MessageBody(key: ValueKey(message.id), message: message),
         ],
       ),
     );
@@ -437,7 +487,7 @@ class _MessageContent extends StatelessWidget {
 /// 空正文（"（无正文）" + 重新下载）。手动重试走 [SyncService.fetchMessageBody] 的
 /// `force: true`，正常情况下首帧的自动下载已覆盖。
 class _MessageBody extends ConsumerStatefulWidget {
-  const _MessageBody({required this.message});
+  const _MessageBody({required this.message, super.key});
 
   final Message message;
 
@@ -460,9 +510,12 @@ class _MessageBodyState extends ConsumerState<_MessageBody> {
     _bodyStream = ref.read(databaseProvider).messageDao.watchBody(_messageId);
   }
 
-  Future<void> _download({bool force = false}) async {
+  Future<void> _download({
+    bool force = false,
+    bool checkExisting = true,
+  }) async {
     if (_downloading) return;
-    if (!force) {
+    if (!force && checkExisting) {
       final existing = await ref
           .read(databaseProvider)
           .messageDao
@@ -518,7 +571,7 @@ class _MessageBodyState extends ConsumerState<_MessageBody> {
         if (!_autoTriggered && !_downloading) {
           _autoTriggered = true;
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) _download();
+            if (mounted) _download(checkExisting: false);
           });
         }
         return _buildLoading(theme);
@@ -539,31 +592,18 @@ class _MessageBodyState extends ConsumerState<_MessageBody> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (hasHtml)
-          RepaintBoundary(
-            child: Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surface,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: theme.colorScheme.outlineVariant,
-                  width: 1,
-                ),
-              ),
-              child: HtmlWidget(
-                body.htmlBody!,
-                textStyle: theme.textTheme.bodyMedium,
-                onTapUrl: _openLink,
-              ),
-            ),
+          MessageHtmlView(
+            htmlBody: body.htmlBody!,
+            textStyle: theme.textTheme.bodyMedium,
+            backgroundColor: theme.colorScheme.surface,
+            foregroundColor: theme.colorScheme.onSurface,
+            linkColor: theme.colorScheme.primary,
+            borderColor: theme.colorScheme.outlineVariant,
+            onOpenUrl: _openLink,
           )
         else if (hasPlain)
           Container(
             padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(8),
-            ),
             child: SelectableText(
               body.plainText!,
               style: theme.textTheme.bodyMedium,

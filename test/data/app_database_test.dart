@@ -3,6 +3,7 @@ import 'package:drift/native.dart';
 import 'package:everyemail/data/local/database/app_database.dart';
 import 'package:everyemail/domain/enums/account_enums.dart';
 import 'package:everyemail/domain/enums/message_enums.dart';
+import 'package:everyemail/domain/models/unified_mailbox.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -113,6 +114,127 @@ void main() {
     await db.messageDao.updateFlags('m-1', seenBit);
     final m1 = await db.messageDao.getMessage('m-1');
     expect(m1!.flagsBitmask & seenBit, seenBit);
+  });
+
+  test('统一文件夹按特殊文件夹类型聚合真实账户邮件', () async {
+    await db.accountDao.upsertAccount(
+      AccountsCompanion.insert(
+        id: 'acc-1',
+        email: 'me@example.com',
+        displayName: '我',
+        accountType: AccountType.genericImap,
+        authType: AuthType.password,
+      ),
+    );
+    await db.accountDao.upsertAccount(
+      AccountsCompanion.insert(
+        id: 'acc-2',
+        email: 'work@example.com',
+        displayName: '工作',
+        accountType: AccountType.genericImap,
+        authType: AuthType.password,
+      ),
+    );
+
+    await db.folderDao.upsertFolders([
+      FoldersCompanion.insert(
+        id: 'f-1-inbox',
+        accountId: 'acc-1',
+        remoteId: 'INBOX',
+        displayName: '收件箱',
+        folderType: FolderType.inbox,
+        unreadCount: const Value(2),
+        totalCount: const Value(2),
+      ),
+      FoldersCompanion.insert(
+        id: 'f-1-sent',
+        accountId: 'acc-1',
+        remoteId: 'Sent',
+        displayName: '已发送',
+        folderType: FolderType.sent,
+        totalCount: const Value(1),
+      ),
+      FoldersCompanion.insert(
+        id: 'f-2-inbox',
+        accountId: 'acc-2',
+        remoteId: 'INBOX',
+        displayName: '收件箱',
+        folderType: FolderType.inbox,
+        unreadCount: const Value(1),
+        totalCount: const Value(1),
+      ),
+      FoldersCompanion.insert(
+        id: 'f-2-custom',
+        accountId: 'acc-2',
+        remoteId: 'Work',
+        displayName: 'Work',
+        folderType: FolderType.custom,
+        unreadCount: const Value(9),
+        totalCount: const Value(9),
+      ),
+    ]);
+
+    await db.messageDao.upsertMessages([
+      MessagesCompanion.insert(
+        id: 'm-inbox-old',
+        accountId: 'acc-1',
+        folderId: 'f-1-inbox',
+        date: DateTime(2026, 5, 1),
+      ),
+      MessagesCompanion.insert(
+        id: 'm-inbox-new',
+        accountId: 'acc-2',
+        folderId: 'f-2-inbox',
+        date: DateTime(2026, 5, 20),
+      ),
+      MessagesCompanion.insert(
+        id: 'm-sent',
+        accountId: 'acc-1',
+        folderId: 'f-1-sent',
+        date: DateTime(2026, 5, 10),
+      ),
+      MessagesCompanion.insert(
+        id: 'm-custom',
+        accountId: 'acc-2',
+        folderId: 'f-2-custom',
+        date: DateTime(2026, 5, 30),
+      ),
+    ]);
+
+    final inbox = await db.messageDao
+        .watchUnifiedFolderMessages(FolderType.inbox)
+        .first;
+    expect(inbox.map((item) => item.message.id), [
+      'm-inbox-new',
+      'm-inbox-old',
+    ]);
+    expect(inbox.map((item) => item.accountEmail), [
+      'work@example.com',
+      'me@example.com',
+    ]);
+
+    final sent = await db.messageDao
+        .watchUnifiedFolderMessages(FolderType.sent)
+        .first;
+    expect(sent.map((item) => item.message.id), ['m-sent']);
+
+    final summaries = await db.folderDao.watchUnifiedFolders().first;
+    expect(summaries.map((folder) => folder.id), [
+      for (final folder in UnifiedMailbox.folders) folder.id,
+    ]);
+    expect(summaries.any((folder) => folder.type == FolderType.custom), false);
+
+    final inboxSummary = summaries.singleWhere(
+      (folder) => folder.type == FolderType.inbox,
+    );
+    expect(inboxSummary.unreadCount, 3);
+    expect(inboxSummary.totalCount, 3);
+    expect(inboxSummary.sourceAccountCount, 2);
+
+    final draftsSummary = summaries.singleWhere(
+      (folder) => folder.type == FolderType.drafts,
+    );
+    expect(draftsSummary.sourceAccountCount, 0);
   });
 
   test('同步游标读写', () async {

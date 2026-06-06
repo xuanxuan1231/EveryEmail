@@ -1,6 +1,8 @@
 name = "everyemail-webhook"
 main = "src/index.js"
 compatibility_date = "2024-01-01"
+workers_dev = true
+preview_urls = true
 
 # Workers KV 命名空间（用于存储订阅信息和 FCM tokens）
 [[kv_namespaces]]
@@ -19,8 +21,15 @@ FIREBASE_PROJECT_ID = "970518560740"
 #     -days 3650 -nodes -subj "/CN=everyemail-fcm"
 # 私钥走 secret（不入库）：wrangler secret put ENCRYPTION_PRIVATE_KEY  ← 粘贴 enc_private.pem 全文
 # 下面填 enc_cert.pem 中 BEGIN/END CERTIFICATE 之间的 base64（去头尾、拼成一行）：
-# ENCRYPTION_CERTIFICATE = "MIID...（一行）"
-# ENCRYPTION_CERTIFICATE_ID = "everyemail-key-1"
+ENCRYPTION_CERTIFICATE = "MIIDEzCCAfugAwIBAgIUclytljnmeUkfj/RhFfncx0v22FYwDQYJKoZIhvcNAQELBQAwGTEXMBUGA1UEAwwOZXZlcnllbWFpbC1mY20wHhcNMjYwNjA1MjMxMDM0WhcNMjYwNzA1MjMxMDM0WjAZMRcwFQYDVQQDDA5ldmVyeWVtYWlsLWZjbTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAMHWmkFOYCcs5GAOawooeiJbBr3jIN4Y4xHacDiKueEGHVsph+H1xBRtQPb+LGwKefZZfLTtM+O2VhZJ+YJUxEAyIHXKun/cOuhLrdEXfymzy90+vkKO3P9fGYuxKak9YOtGPFrziQs5orfzBv9J+0cZboAhP3Eh/6QHOgw/9Q0E+FR3VfKGoPcIkkqW/OkHUi8PyIvq8yrOFT90e831PKczxrvcJauvuW9+z9Fj3HPId25ok4XRWOo1w0aDoyqHzH2d31/WUuQoniQWBgrXhEbQq/imHRejAYgMK/CT9aWqEM3HIMFDrWptQoeDz7IlpKJ8y/QyWCb3W5nTrnOHx1sCAwEAAaNTMFEwHQYDVR0OBBYEFJmD10x5h+PQPw80s9D518X9H75sMB8GA1UdIwQYMBaAFJmD10x5h+PQPw80s9D518X9H75sMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggEBALoo6X4TD0Aja0lf7Tjeearyv8G9Z5+doCsQH1+j7BOr8TjH/jmXCSGAp9IXxsVYFQK0hUEeSvRKQ3d3YDUA1RHY4/aUcoYK9avV8GeK0zWsZWuTaSavOWvNS4LPIJMyzzFzICCkuhHJmj5M591vV5YGDFy/8L6YGZm+cLBMFg7+REe8uluHuERWBBJJbOKpGXj1dBM0oJ3SsuW4vt7pLkDuaMdhNObwL/djcy8/WuQjYkM9ic45IDfsSRRn4HjD08Wk1JfTKKXSBflKCfDQoUf6DiZod5wl9QlNfJSeIqWd4wnnzwmyjOfu0SBCeDXYEZ2kXjl8rYtdPmDuutArb7M="
+ENCRYPTION_CERTIFICATE_ID = "everyemail-key-1"
 
 [observability]
 enabled = true
+
+[[routes]]
+pattern = "ee-webhook.gemen.pp.ua"
+zone_name = "gemen.pp.ua"
+custom_domain = true
+enabled = true
+previews_enabled = false

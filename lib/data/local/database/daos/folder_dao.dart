@@ -1,6 +1,7 @@
 import 'package:drift/drift.dart';
 
 import '../../../../domain/enums/message_enums.dart';
+import '../../../../domain/models/unified_mailbox.dart';
 import '../app_database.dart';
 import '../tables.dart';
 
@@ -23,14 +24,53 @@ class FolderDao extends DatabaseAccessor<AppDatabase> with _$FolderDaoMixin {
     return (select(folders)..where((t) => t.accountId.equals(accountId))).get();
   }
 
+  /// 监听统一账户下固定统一化文件夹的摘要。
+  ///
+  /// 统一文件夹不是数据库行；这里把所有真实账户中相同语义角色的文件夹计数
+  /// 汇总到 [UnifiedMailbox.folders]。
+  Stream<List<UnifiedMailboxFolder>> watchUnifiedFolders() {
+    final unifiedTypes = UnifiedMailbox.folders.map((f) => f.type).toList();
+    final query = select(folders)
+      ..where((t) {
+        final expressions = unifiedTypes.map((type) {
+          return t.folderType.equals(type.index);
+        }).toList();
+        return expressions.reduce((a, b) => a | b);
+      });
+
+    return query.watch().map((rows) {
+      return UnifiedMailbox.folders.map((unifiedFolder) {
+        final sourceRows = rows.where((row) {
+          return row.folderType == unifiedFolder.type;
+        }).toList();
+        final sourceAccountIds = sourceRows.map((row) => row.accountId).toSet();
+        final unreadCount = sourceRows.fold<int>(
+          0,
+          (sum, row) => sum + row.unreadCount,
+        );
+        final totalCount = sourceRows.fold<int>(
+          0,
+          (sum, row) => sum + row.totalCount,
+        );
+
+        return unifiedFolder.copyWith(
+          unreadCount: unreadCount,
+          totalCount: totalCount,
+          sourceAccountCount: sourceAccountIds.length,
+        );
+      }).toList();
+    });
+  }
+
   Future<Folder?> getFolder(String id) {
     return (select(folders)..where((t) => t.id.equals(id))).getSingleOrNull();
   }
 
   /// 按后端原生标识查找（同步对账时把远端文件夹映射到本地行）。
   Future<Folder?> getByRemoteId(String accountId, String remoteId) {
-    return (select(folders)
-          ..where((t) => t.accountId.equals(accountId) & t.remoteId.equals(remoteId)))
+    return (select(folders)..where(
+          (t) => t.accountId.equals(accountId) & t.remoteId.equals(remoteId),
+        ))
         .getSingleOrNull();
   }
 
@@ -47,8 +87,7 @@ class FolderDao extends DatabaseAccessor<AppDatabase> with _$FolderDaoMixin {
   Future<void> updateCounts(String id, {int? unread, int? total}) {
     return (update(folders)..where((t) => t.id.equals(id))).write(
       FoldersCompanion(
-        unreadCount:
-            unread == null ? const Value.absent() : Value(unread),
+        unreadCount: unread == null ? const Value.absent() : Value(unread),
         totalCount: total == null ? const Value.absent() : Value(total),
       ),
     );

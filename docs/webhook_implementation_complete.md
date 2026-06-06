@@ -68,7 +68,7 @@ wrangler secret put FCM_SERVER_KEY
 wrangler deploy
 
 # 8. 查看 Worker URL
-# 输出类似：https://everyemail-webhook.YOUR_SUBDOMAIN.workers.dev
+# 输出类似：https://ee-webhook.gemen.pp.ua
 ```
 
 ---
@@ -169,7 +169,7 @@ import '../data/webhook/webhook_manager.dart';
 
 final webhookServiceProvider = Provider<WebhookService>((ref) {
   return WebhookService(
-    workerUrl: 'https://everyemail-webhook.YOUR_SUBDOMAIN.workers.dev',
+    workerUrl: 'https://ee-webhook.gemen.pp.ua',
   );
 });
 

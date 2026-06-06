@@ -29,7 +29,7 @@
 
 找到这一行：
 ```dart
-workerUrl: 'https://everyemail-webhook.YOUR_SUBDOMAIN.workers.dev',
+workerUrl: 'https://ee-webhook.gemen.pp.ua',
 ```
 
 替换为你的实际 Worker URL（从 Cloudflare 部署输出获取）。
@@ -197,7 +197,7 @@ flutter run
 2. 检查应用日志：查看 `debugPrint` 输出
 3. 手动测试 Worker：
    ```bash
-   curl https://your-worker.workers.dev/health
+   curl https://ee-webhook.gemen.pp.ua/health
    ```
 
 ---

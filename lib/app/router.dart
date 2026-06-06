@@ -27,6 +27,7 @@ final GoRouter appRouter = GoRouter(
         final initialMessage = state.extra is Message
             ? state.extra! as Message
             : null;
+
         return MessageDetailPage(
           messageId: messageId,
           initialMessage: initialMessage,

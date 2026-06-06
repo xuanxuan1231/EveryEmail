@@ -1,3 +1,5 @@
+// ignore_for_file: prefer_initializing_formals
+
 import 'package:drift/drift.dart';
 
 import '../../core/utils/id_generator.dart';
@@ -19,11 +21,11 @@ class AccountRepository {
     required OAuthService oauthService,
     DiscoveryService? discovery,
     WebhookManager? webhookManager,
-  })  : _db = db,
-        _tokenStore = tokenStore,
-        _oauth = oauthService,
-        _discovery = discovery ?? const DiscoveryService(),
-        _webhookManager = webhookManager;
+  }) : _db = db,
+       _tokenStore = tokenStore,
+       _oauth = oauthService,
+       _discovery = discovery ?? const DiscoveryService(),
+       _webhookManager = webhookManager;
 
   final AppDatabase _db;
   final TokenStore _tokenStore;
@@ -49,12 +51,16 @@ class AccountRepository {
     required AccountType type,
     required DiscoveryResult discovered,
   }) async {
-    assert(type == AccountType.gmailOAuth || type == AccountType.microsoftGraph);
+    assert(
+      type == AccountType.gmailOAuth || type == AccountType.microsoftGraph,
+    );
 
-    final tokens = await _oauth.authorize(type);
+    final tokens = await _oauth.authorize(type, expectedEmail: email);
     final refresh = tokens.refreshToken;
     if (refresh == null) {
-      throw StateError('OAuth 未返回 refresh token（请确认已申请 offline_access / access_type=offline）');
+      throw StateError(
+        'OAuth 未返回 refresh token（请确认已申请 offline_access / access_type=offline）',
+      );
     }
 
     final accountId = generateId();

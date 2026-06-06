@@ -234,7 +234,7 @@ Flutter 端的代码不需要任何改动，因为：
 wrangler tail
 
 # 发送测试请求
-curl -X POST https://your-worker.workers.dev/api/register-fcm \
+curl -X POST https://ee-webhook.gemen.pp.ua/api/register-fcm \
   -H "Content-Type: application/json" \
   -d '{"userId":"test","accountId":"test","fcmToken":"test-token"}'
 ```
