@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -69,13 +71,16 @@ class _MessageDetailPageState extends ConsumerState<MessageDetailPage> {
     super.dispose();
   }
 
-  void _registerReturnPreview(Message message) {
+  void _registerReturnPreview(Message message, {Color? sourceBackgroundColor}) {
     _registeredSharedElementId = message.id;
+    final displaySettings = ref.read(displaySettingsProvider);
     PredictiveBackSharedElementRegistry.instance.setActive(
       id: message.id,
+      sourceBackgroundColor: sourceBackgroundColor,
       previewBuilder: (context) => GmailMobileMessageCardContent(
         message: message,
         showAccountLabel: false,
+        displaySettings: displaySettings,
       ),
     );
   }
@@ -112,7 +117,10 @@ class _MessageDetailPageState extends ConsumerState<MessageDetailPage> {
     final db = ref.watch(databaseProvider);
 
     final scaffold = Scaffold(
+      backgroundColor: theme.colorScheme.surface,
       appBar: AppBar(
+        backgroundColor: theme.colorScheme.surface,
+        surfaceTintColor: Colors.transparent,
         actions: [
           IconButton(
             icon: const Icon(Icons.reply),
@@ -158,7 +166,12 @@ class _MessageDetailPageState extends ConsumerState<MessageDetailPage> {
 
                     if (confirmed == true) {
                       try {
-                        await db.messageDao.deleteMessages([message.id]);
+                        final syncService = ref.read(syncServiceProvider);
+                        await syncService.deleteMessage(message.id);
+                        final account = await syncService.accountConfigFor(
+                          message.accountId,
+                        );
+                        unawaited(syncService.flushOutbox(account));
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(content: Text('邮件已删除')),
@@ -222,17 +235,20 @@ class _MessageDetailPageState extends ConsumerState<MessageDetailPage> {
                     );
 
                     if (targetFolder != null && context.mounted) {
-                      // TODO: 连接后端 API 移动邮件
-                      // 暂时只更新本地数据库
                       try {
-                        // 这里应该调用后端 API，然后更新本地
-                        // await syncService.moveMessage(message, targetFolder);
-
+                        final syncService = ref.read(syncServiceProvider);
+                        await syncService.moveMessageToFolder(
+                          message.id,
+                          targetFolder.id,
+                        );
+                        final account = await syncService.accountConfigFor(
+                          message.accountId,
+                        );
+                        unawaited(syncService.flushOutbox(account));
+                        if (!context.mounted) return;
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
-                            content: Text(
-                              '移动功能需要连接后端 API\n目标文件夹: ${targetFolder.displayName}',
-                            ),
+                            content: Text('已移动到 ${targetFolder.displayName}'),
                             duration: const Duration(seconds: 3),
                           ),
                         );
@@ -359,7 +375,10 @@ class _MessageDetailPageState extends ConsumerState<MessageDetailPage> {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             _ensureMarkedRead(message);
           });
-          _registerReturnPreview(message);
+          _registerReturnPreview(
+            message,
+            sourceBackgroundColor: theme.colorScheme.surface,
+          );
 
           return _MessageContent(message: message);
         },
@@ -639,28 +658,56 @@ class _MessageBodyState extends ConsumerState<_MessageBody> {
         // 附件（字节按需下载，这里只列元数据）。
         if (attachments.isNotEmpty) ...[
           const SizedBox(height: 24),
-          AttachmentList(attachments: attachments),
+          AttachmentList(attachments: attachments, messageId: _messageId),
         ],
       ],
     );
   }
 
+  /// 正文尚未到达本地时的占位：立即显示信封里的 `preview` 摘要，避免空白转圈，
+  /// 正文 HTML 下载完成后由 `watchBody` 触发无缝替换为 [_buildContent]。
   Widget _buildLoading(ThemeData theme) {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      alignment: Alignment.center,
-      child: Column(
-        children: [
-          const CircularProgressIndicator(),
-          const SizedBox(height: 12),
-          Text(
-            '正在下载正文…',
-            style: theme.textTheme.bodyMedium?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
+    final preview = widget.message.preview.trim();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // 顶部细进度条：提示正文正在后台下载。
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 4),
+          child: LinearProgressIndicator(minHeight: 2),
+        ),
+        const SizedBox(height: 12),
+        if (preview.isNotEmpty)
+          // 立即可读的摘要，观感接近"点开即见内容"。
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Text(
+              preview,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+                height: 1.5,
+              ),
             ),
+          )
+        else
+          Row(
+            children: [
+              const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                '正在下载正文…',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
+      ],
     );
   }
 

@@ -1,16 +1,22 @@
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:open_filex/open_filex.dart';
 
+import '../../../app/providers.dart';
 import '../../../domain/models/mail_attachment.dart';
 
 /// 附件列表组件。
 class AttachmentList extends StatelessWidget {
   const AttachmentList({
     required this.attachments,
+    required this.messageId,
     super.key,
   });
 
   final List<MailAttachment> attachments;
+
+  /// 所属邮件的本地 id，用于按需下载附件字节。
+  final String messageId;
 
   @override
   Widget build(BuildContext context) {
@@ -40,36 +46,50 @@ class AttachmentList extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 12),
-        ...attachments.map((attachment) => _AttachmentItem(attachment: attachment)),
+        ...attachments.map(
+          (attachment) => _AttachmentItem(
+            key: ValueKey(attachment.partId),
+            attachment: attachment,
+            messageId: messageId,
+          ),
+        ),
       ],
     );
   }
 }
 
-/// 单个附件项。
-class _AttachmentItem extends StatelessWidget {
+/// 单个附件项。点按/下载按钮：未下载则取字节存本地，已下载则打开本地文件。
+class _AttachmentItem extends ConsumerStatefulWidget {
   const _AttachmentItem({
     required this.attachment,
+    required this.messageId,
+    super.key,
   });
 
   final MailAttachment attachment;
+  final String messageId;
+
+  @override
+  ConsumerState<_AttachmentItem> createState() => _AttachmentItemState();
+}
+
+class _AttachmentItemState extends ConsumerState<_AttachmentItem> {
+  bool _downloading = false;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final attachment = widget.attachment;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
         color: theme.colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: theme.colorScheme.outlineVariant,
-          width: 1,
-        ),
+        border: Border.all(color: theme.colorScheme.outlineVariant, width: 1),
       ),
       child: InkWell(
-        onTap: () => _handleTap(context),
+        onTap: _downloading ? null : _onPrimaryAction,
         borderRadius: BorderRadius.circular(8),
         child: Padding(
           padding: const EdgeInsets.all(12),
@@ -134,17 +154,8 @@ class _AttachmentItem extends StatelessWidget {
                 ),
               ),
 
-              // 下载按钮
-              IconButton(
-                icon: Icon(
-                  attachment.localPath != null ? Icons.check_circle : Icons.download,
-                  color: attachment.localPath != null
-                      ? theme.colorScheme.primary
-                      : theme.colorScheme.onSurfaceVariant,
-                ),
-                onPressed: () => _handleDownload(context),
-                tooltip: attachment.localPath != null ? '已下载' : '下载',
-              ),
+              // 下载 / 打开 按钮（下载中显示进度）
+              _buildTrailing(theme),
             ],
           ),
         ),
@@ -152,57 +163,86 @@ class _AttachmentItem extends StatelessWidget {
     );
   }
 
-  void _handleTap(BuildContext context) {
-    if (attachment.localPath != null) {
-      // 打开本地文件
-      _openFile(context, attachment.localPath!);
-    } else {
-      // 提示下载
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('点击下载按钮下载 ${attachment.filename ?? "附件"}'),
-          duration: const Duration(seconds: 2),
-        ),
-      );
-    }
-  }
-
-  void _handleDownload(BuildContext context) {
-    if (attachment.localPath != null) {
-      // 已下载，打开文件
-      _openFile(context, attachment.localPath!);
-    } else {
-      // TODO: 实现下载功能
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('下载功能待实现：${attachment.filename ?? "附件"}'),
-          action: SnackBarAction(
-            label: '确定',
-            onPressed: () {},
+  Widget _buildTrailing(ThemeData theme) {
+    if (_downloading) {
+      return const SizedBox(
+        width: 48,
+        height: 48,
+        child: Center(
+          child: SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2),
           ),
         ),
       );
     }
+    final downloaded = widget.attachment.localPath != null;
+    return IconButton(
+      icon: Icon(
+        downloaded ? Icons.check_circle : Icons.download,
+        color: downloaded
+            ? theme.colorScheme.primary
+            : theme.colorScheme.onSurfaceVariant,
+      ),
+      onPressed: _onPrimaryAction,
+      tooltip: downloaded ? '打开' : '下载',
+    );
   }
 
-  Future<void> _openFile(BuildContext context, String path) async {
-    try {
-      final uri = Uri.file(path);
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri);
-      } else {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('无法打开文件')),
-          );
-        }
-      }
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('打开文件失败: $e')),
-        );
-      }
+  Future<void> _onPrimaryAction() async {
+    final path = widget.attachment.localPath;
+    if (path != null) {
+      await _openFile(path);
+    } else {
+      await _download();
     }
+  }
+
+  Future<void> _download() async {
+    if (_downloading) return;
+    setState(() => _downloading = true);
+    try {
+      // 下载完成后由 SyncService 把 localPath 写回 attachmentsMeta，详情页 watchBody
+      // 会响应式重建本组件，按钮自动切换为"打开"。
+      await ref
+          .read(syncServiceProvider)
+          .downloadAttachment(
+            messageId: widget.messageId,
+            partId: widget.attachment.partId,
+          );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已下载 ${widget.attachment.filename ?? "附件"}')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('下载失败: $e')));
+    } finally {
+      if (mounted) setState(() => _downloading = false);
+    }
+  }
+
+  Future<void> _openFile(String path) async {
+    // open_filex 在 Android 上经内置 FileProvider 以 content:// 打开应用私有目录的
+    // 文件（url_launcher 的 file:// 在 Android 会被系统拦），并在各平台调用默认应用。
+    // 传 MIME 提示帮 Android 选对应用；通用 octet-stream 则留空，让其按扩展名推断。
+    final mime = widget.attachment.mimeType;
+    final result = await OpenFilex.open(
+      path,
+      type: (mime.isEmpty || mime == 'application/octet-stream') ? null : mime,
+    );
+    if (!mounted || result.type == ResultType.done) return;
+    final message = switch (result.type) {
+      ResultType.noAppToOpen => '没有可打开此类文件的应用',
+      ResultType.fileNotFound => '文件不存在，请重新下载',
+      ResultType.permissionDenied => '无权限打开文件',
+      _ => '打开文件失败: ${result.message}',
+    };
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 }

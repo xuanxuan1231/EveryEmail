@@ -15,7 +15,7 @@ Widget buildMailWebViewWidgetImpl({
       params: AndroidWebViewWidgetCreationParams(
         controller: controller.platform,
         gestureRecognizers: gestureRecognizers,
-        displayWithHybridComposition: true,
+        displayWithHybridComposition: false,
       ),
     );
   }
