@@ -13,6 +13,19 @@ class OAuthAccountIdentity {
     this.proxyAddresses = const [],
   });
 
+  /// Identity from a generic OIDC id_token. Google's id_token carries the
+  /// verified `email` claim (scopes `openid email`), which is all we need to
+  /// learn the account's address when the user signs in without typing one.
+  factory OAuthAccountIdentity.fromIdTokenClaims(
+    Map<String, dynamic>? tokenClaims,
+  ) {
+    final claims = tokenClaims ?? const <String, dynamic>{};
+    return OAuthAccountIdentity(
+      email: _stringOrNull(claims['email']),
+      preferredUsername: _stringOrNull(claims['preferred_username']),
+    );
+  }
+
   factory OAuthAccountIdentity.fromMicrosoftData({
     Map<String, dynamic>? tokenClaims,
     Map<String, dynamic>? graphProfile,

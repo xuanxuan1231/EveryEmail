@@ -51,3 +51,31 @@ class GraphRef extends MessageRef {
   @override
   String toString() => 'GraphRef($messageId@$folderId)';
 }
+
+/// Gmail 邮件引用：Gmail REST API 的全邮箱唯一 message id。
+///
+/// [labelId] 是观察到该邮件时所在的标签（文件夹），移动（改标签）时用作要移除的
+/// 源标签——与 [GraphRef.folderId] 同理。[threadId] 为 Gmail 线程 id（落 threadKey）。
+class GmailRef extends MessageRef {
+  const GmailRef({
+    required this.messageId,
+    required this.labelId,
+    this.threadId,
+  });
+
+  final String messageId;
+  final String labelId;
+  final String? threadId;
+
+  @override
+  bool operator ==(Object other) =>
+      other is GmailRef &&
+      other.messageId == messageId &&
+      other.labelId == labelId;
+
+  @override
+  int get hashCode => Object.hash(messageId, labelId);
+
+  @override
+  String toString() => 'GmailRef($messageId@$labelId)';
+}

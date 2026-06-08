@@ -59,6 +59,8 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Choose a photo for your account avatar.</string>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
@@ -71,6 +73,22 @@
 		<string>UIInterfaceOrientationPortraitUpsideDown</string>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<!-- Google Sign-In (GIS) 回调 URL scheme。把下面的占位符换成你的 iOS OAuth
+	     客户端 ID 的反向形式：com.googleusercontent.apps.<iOS 客户端 ID 去掉
+	     .apps.googleusercontent.com 的前缀>。iOS 客户端 ID 本身通过
+	     --dart-define=GOOGLE_IOS_CLIENT_ID 传给 GoogleSignIn.initialize；但此 URL
+	     scheme 必须在原生侧登记，无法由 dart-define 注入。详见 docs/oauth-setup.md。 -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.YOUR_IOS_CLIENT_ID</string>
+			</array>
+		</dict>
 	</array>
 </dict>
 </plist>

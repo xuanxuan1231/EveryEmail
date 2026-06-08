@@ -24,33 +24,10 @@ class OAuthProviderConfig {
 class OAuthProviders {
   const OAuthProviders._();
 
-  /// Google：IMAP/SMTP 全权限 scope = https://mail.google.com/，外加身份 scope。
-  /// Android 客户端重定向用 client id 的反向 DNS（AppAuth 约定）。
-  static OAuthProviderConfig? google() {
-    if (!AppConfig.isGoogleConfigured) return null;
-    final clientId = AppConfig.googleClientId;
-    // 反向 DNS：xxxx.apps.googleusercontent.com -> com.googleusercontent.apps.xxxx
-    final reversed = _reverseGoogleClientId(clientId);
-    return OAuthProviderConfig(
-      clientId: clientId,
-      redirectUrl: '$reversed:/oauth2redirect',
-      scopes: const [
-        'https://mail.google.com/',
-        'openid',
-        'email',
-        'profile',
-      ],
-      serviceConfiguration: const AuthorizationServiceConfiguration(
-        authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
-        tokenEndpoint: 'https://oauth2.googleapis.com/token',
-      ),
-      // 强制返回 refresh token + 每次都给同意，避免拿不到 refresh token。
-      additionalParameters: const {
-        'access_type': 'offline',
-        'prompt': 'consent',
-      },
-    );
-  }
+  /// Gmail 所需的 OAuth scope。IMAP/SMTP XOAUTH2 需要全权限 `https://mail.google.com/`。
+  /// 账户邮箱直接取自 GIS 登录返回的 `GoogleSignInAccount.email`，无需额外的
+  /// `openid/email/profile` 授权 scope。
+  static const List<String> googleScopes = ['https://mail.google.com/'];
 
   /// Microsoft：邮件走 Graph，scope 为 Graph 委托权限 + offline_access。
   /// authority = common（个人 + 工作/学校账户）。
@@ -83,21 +60,18 @@ class OAuthProviders {
     );
   }
 
-  /// 按账户类型取提供商配置；未配置或不适用时返回 null。
+  /// 按账户类型取 **AppAuth** 提供商配置；未配置或不适用时返回 null。
+  ///
+  /// Gmail 已改用 Google Identity Services 原生流程（见 `GoogleAuthService`），
+  /// 不再走 flutter_appauth / 自定义 URI scheme，因此这里对 Gmail 返回 null。
   static OAuthProviderConfig? forType(AccountType type) {
     switch (type) {
       case AccountType.gmailOAuth:
-        return google();
+        return null;
       case AccountType.microsoftGraph:
         return microsoft();
       case AccountType.genericImap:
         return null;
     }
-  }
-
-  static String _reverseGoogleClientId(String clientId) {
-    // xxxx.apps.googleusercontent.com -> com.googleusercontent.apps.xxxx
-    final base = clientId.replaceAll('.apps.googleusercontent.com', '');
-    return 'com.googleusercontent.apps.$base';
   }
 }

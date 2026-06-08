@@ -34,6 +34,19 @@ class DiscoveryResult {
 class DiscoveryService {
   const DiscoveryService();
 
+  /// Gmail / Google Workspace 的固定 IMAP/SMTP 端点。
+  /// Workspace 自定义域也用这些（IMAP 始终是 imap.gmail.com）。
+  static const ServerConfig gmailImap = ServerConfig(
+    host: 'imap.gmail.com',
+    port: 993,
+    socketType: SocketType.ssl,
+  );
+  static const ServerConfig gmailSmtp = ServerConfig(
+    host: 'smtp.gmail.com',
+    port: 465,
+    socketType: SocketType.ssl,
+  );
+
   /// Gmail / Google Workspace 的已知域。
   static const _googleDomains = {'gmail.com', 'googlemail.com'};
 
@@ -71,19 +84,11 @@ class DiscoveryService {
     if (config == null || config.isNotValid) {
       // Gmail 即使发现失败也能用已知端点兜底。
       if (type == AccountType.gmailOAuth) {
-        return DiscoveryResult(
+        return const DiscoveryResult(
           suggestedType: AccountType.gmailOAuth,
           displayName: 'Google Mail',
-          imap: const ServerConfig(
-            host: 'imap.gmail.com',
-            port: 993,
-            socketType: SocketType.ssl,
-          ),
-          smtp: const ServerConfig(
-            host: 'smtp.gmail.com',
-            port: 465,
-            socketType: SocketType.ssl,
-          ),
+          imap: gmailImap,
+          smtp: gmailSmtp,
         );
       }
       return null;
