@@ -61,11 +61,14 @@
             android:name="flutterEmbedding"
             android:value="2" />
 
-        <!-- FCM 默认 notification channel：Worker payload android.notification.channel_id 必须与此一致。
-             Dart 端启动时通过 flutter_local_notifications / FirebaseMessaging 会创建对应 channel。 -->
+        <!-- FCM 默认通知渠道与小图标。新邮件(created)走 notification 消息，由系统
+             直接弹到 everyemail_default 渠道。小图标须为纯 alpha 单色，否则状态栏白块。 -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
             android:value="everyemail_default" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_stat_notification" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and
