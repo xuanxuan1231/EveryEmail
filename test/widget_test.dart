@@ -3,6 +3,7 @@ import 'package:everyemail/app/app.dart';
 import 'package:everyemail/app/providers.dart';
 import 'package:everyemail/data/local/database/app_database.dart';
 import 'package:everyemail/data/settings/app_font_settings.dart';
+import 'package:everyemail/data/settings/display_settings.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -15,8 +16,12 @@ void main() {
       ProviderScope(
         overrides: [
           databaseProvider.overrideWithValue(testDb),
-          appFontProvider
-              .overrideWith((ref) => AppFontController(AppFont.system)),
+          appFontProvider.overrideWith(
+            (ref) => AppFontController(AppFont.system),
+          ),
+          displaySettingsProvider.overrideWith(
+            (ref) => DisplaySettingsController(DisplaySettings.defaults),
+          ),
         ],
         child: const EveryMailApp(),
       ),
