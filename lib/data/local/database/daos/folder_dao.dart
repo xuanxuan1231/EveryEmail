@@ -26,8 +26,8 @@ class FolderDao extends DatabaseAccessor<AppDatabase> with _$FolderDaoMixin {
 
   /// 监听统一账户下固定统一化文件夹的摘要。
   ///
-  /// 统一文件夹不是数据库行；这里把所有真实账户中相同语义角色的文件夹计数
-  /// 汇总到 [UnifiedMailbox.folders]。
+  /// 统一文件夹不是数据库行；这里把所有真实账户中相同语义角色、且开启了
+  /// 「统一化」的文件夹计数汇总到 [UnifiedMailbox.folders]。
   Stream<List<UnifiedMailboxFolder>> watchUnifiedFolders() {
     final unifiedTypes = UnifiedMailbox.folders.map((f) => f.type).toList();
     final query = select(folders)
@@ -35,7 +35,7 @@ class FolderDao extends DatabaseAccessor<AppDatabase> with _$FolderDaoMixin {
         final expressions = unifiedTypes.map((type) {
           return t.folderType.equals(type.index);
         }).toList();
-        return expressions.reduce((a, b) => a | b);
+        return expressions.reduce((a, b) => a | b) & t.unified.equals(true);
       });
 
     return query.watch().map((rows) {
@@ -89,6 +89,28 @@ class FolderDao extends DatabaseAccessor<AppDatabase> with _$FolderDaoMixin {
       FoldersCompanion(
         unreadCount: unread == null ? const Value.absent() : Value(unread),
         totalCount: total == null ? const Value.absent() : Value(total),
+      ),
+    );
+  }
+
+  /// 更新单个文件夹的用户偏好开关。未传入的参数保持原值。
+  Future<void> updateFolderFlags(
+    String id, {
+    bool? visible,
+    bool? syncEnabled,
+    bool? notificationsEnabled,
+    bool? unified,
+  }) {
+    return (update(folders)..where((t) => t.id.equals(id))).write(
+      FoldersCompanion(
+        visible: visible == null ? const Value.absent() : Value(visible),
+        syncEnabled: syncEnabled == null
+            ? const Value.absent()
+            : Value(syncEnabled),
+        notificationsEnabled: notificationsEnabled == null
+            ? const Value.absent()
+            : Value(notificationsEnabled),
+        unified: unified == null ? const Value.absent() : Value(unified),
       ),
     );
   }

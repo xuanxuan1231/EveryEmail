@@ -42,8 +42,7 @@ class Accounts extends Table {
   /// 排序序号（多账户列表）。
   IntColumn get sortIndex => integer().withDefault(const Constant(0))();
 
-  DateTimeColumn get createdAt =>
-      dateTime().withDefault(currentDateAndTime)();
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -74,6 +73,19 @@ class Folders extends Table {
   /// 是否可被 IDLE/同步监听（如 INBOX）。
   BoolColumn get isSubscribed => boolean().withDefault(const Constant(true))();
 
+  /// 是否在抽屉的文件夹列表中显示（用户级偏好，不影响同步本身）。
+  BoolColumn get visible => boolean().withDefault(const Constant(true))();
+
+  /// 是否同步此文件夹的邮件（与账户级同步范围共同决定，二者皆真才同步）。
+  BoolColumn get syncEnabled => boolean().withDefault(const Constant(true))();
+
+  /// 此文件夹收到新邮件时是否通知。
+  BoolColumn get notificationsEnabled =>
+      boolean().withDefault(const Constant(true))();
+
+  /// 是否纳入统一账户的聚合视图（统一收件箱/已发送/草稿）。
+  BoolColumn get unified => boolean().withDefault(const Constant(true))();
+
   IntColumn get sortIndex => integer().withDefault(const Constant(0))();
 
   @override
@@ -99,6 +111,9 @@ class Messages extends Table {
 
   /// Graph：immutable message id。
   TextColumn get graphMessageId => text().nullable()();
+
+  /// Gmail：REST API 的 message id（全邮箱唯一）。
+  TextColumn get gmailMessageId => text().nullable()();
 
   // —— 信封字段 ——
   TextColumn get subject => text().withDefault(const Constant(''))();
@@ -134,9 +149,10 @@ class Messages extends Table {
 
   @override
   List<Set<Column>> get uniqueKeys => [
-        {folderId, imapUid},
-        {accountId, graphMessageId},
-      ];
+    {folderId, imapUid},
+    {accountId, graphMessageId},
+    {accountId, gmailMessageId},
+  ];
 }
 
 /// 邮件正文表。与 [Messages] 一对一，按需下载。
@@ -151,8 +167,9 @@ class MessageBodies extends Table {
   TextColumn get htmlBody => text().nullable()();
 
   /// 下载状态。
-  IntColumn get fetchState => intEnum<BodyFetchState>()
-      .withDefault(Constant(BodyFetchState.notDownloaded.index))();
+  IntColumn get fetchState => intEnum<BodyFetchState>().withDefault(
+    Constant(BodyFetchState.notDownloaded.index),
+  )();
 
   /// 附件元数据 JSON 数组（[{partId,filename,mimeType,size,isInline,contentId,localPath}]）。
   /// 实际字节落文件系统，见 FileStore。
@@ -206,8 +223,7 @@ class OutboxOps extends Table {
 
   TextColumn get lastError => text().nullable()();
 
-  DateTimeColumn get createdAt =>
-      dateTime().withDefault(currentDateAndTime)();
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
 
   // 注：使用 autoIncrement() 的列会自动成为主键，无需重写 primaryKey。
 }

@@ -20,9 +20,9 @@ class OutboxDao extends DatabaseAccessor<AppDatabase> with _$OutboxDaoMixin {
   }
 
   Future<List<OutboxOp>> getPending() {
-    return (select(outboxOps)
-          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
-        .get();
+    return (select(
+      outboxOps,
+    )..orderBy([(t) => OrderingTerm.asc(t.createdAt)])).get();
   }
 
   /// 取某账户的待处理操作，按 createdAt 升序（最旧优先）。
@@ -50,13 +50,24 @@ class OutboxDao extends DatabaseAccessor<AppDatabase> with _$OutboxDaoMixin {
       _ => const <String>[],
     };
     if (opTypes.isEmpty) return;
+    await removeOpsForMessage(accountId, messageId, opTypes);
+  }
+
+  /// 删除同一账户、同一邮件、指定类型的待推送条目。
+  Future<void> removeOpsForMessage(
+    String accountId,
+    String messageId,
+    List<String> opTypes,
+  ) async {
+    if (opTypes.isEmpty) return;
     // payload 是 JSON 字符串，含 "messageId":"<id>"。简单 LIKE 匹配足够，
     // 因为 messageId 是 ULID/GUID，不会与其它字段碰撞。
-    await (delete(outboxOps)
-          ..where((t) =>
+    await (delete(outboxOps)..where(
+          (t) =>
               t.accountId.equals(accountId) &
               t.opType.isIn(opTypes) &
-              t.payload.like('%"messageId":"$messageId"%')))
+              t.payload.like('%"messageId":"$messageId"%'),
+        ))
         .go();
   }
 

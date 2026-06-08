@@ -1061,6 +1061,65 @@ class $FoldersTable extends Folders with TableInfo<$FoldersTable, Folder> {
     ),
     defaultValue: const Constant(true),
   );
+  static const VerificationMeta _visibleMeta = const VerificationMeta(
+    'visible',
+  );
+  @override
+  late final GeneratedColumn<bool> visible = GeneratedColumn<bool>(
+    'visible',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("visible" IN (0, 1))',
+    ),
+    defaultValue: const Constant(true),
+  );
+  static const VerificationMeta _syncEnabledMeta = const VerificationMeta(
+    'syncEnabled',
+  );
+  @override
+  late final GeneratedColumn<bool> syncEnabled = GeneratedColumn<bool>(
+    'sync_enabled',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("sync_enabled" IN (0, 1))',
+    ),
+    defaultValue: const Constant(true),
+  );
+  static const VerificationMeta _notificationsEnabledMeta =
+      const VerificationMeta('notificationsEnabled');
+  @override
+  late final GeneratedColumn<bool> notificationsEnabled = GeneratedColumn<bool>(
+    'notifications_enabled',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("notifications_enabled" IN (0, 1))',
+    ),
+    defaultValue: const Constant(true),
+  );
+  static const VerificationMeta _unifiedMeta = const VerificationMeta(
+    'unified',
+  );
+  @override
+  late final GeneratedColumn<bool> unified = GeneratedColumn<bool>(
+    'unified',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("unified" IN (0, 1))',
+    ),
+    defaultValue: const Constant(true),
+  );
   static const VerificationMeta _sortIndexMeta = const VerificationMeta(
     'sortIndex',
   );
@@ -1084,6 +1143,10 @@ class $FoldersTable extends Folders with TableInfo<$FoldersTable, Folder> {
     unreadCount,
     totalCount,
     isSubscribed,
+    visible,
+    syncEnabled,
+    notificationsEnabled,
+    unified,
     sortIndex,
   ];
   @override
@@ -1160,6 +1223,36 @@ class $FoldersTable extends Folders with TableInfo<$FoldersTable, Folder> {
         ),
       );
     }
+    if (data.containsKey('visible')) {
+      context.handle(
+        _visibleMeta,
+        visible.isAcceptableOrUnknown(data['visible']!, _visibleMeta),
+      );
+    }
+    if (data.containsKey('sync_enabled')) {
+      context.handle(
+        _syncEnabledMeta,
+        syncEnabled.isAcceptableOrUnknown(
+          data['sync_enabled']!,
+          _syncEnabledMeta,
+        ),
+      );
+    }
+    if (data.containsKey('notifications_enabled')) {
+      context.handle(
+        _notificationsEnabledMeta,
+        notificationsEnabled.isAcceptableOrUnknown(
+          data['notifications_enabled']!,
+          _notificationsEnabledMeta,
+        ),
+      );
+    }
+    if (data.containsKey('unified')) {
+      context.handle(
+        _unifiedMeta,
+        unified.isAcceptableOrUnknown(data['unified']!, _unifiedMeta),
+      );
+    }
     if (data.containsKey('sort_index')) {
       context.handle(
         _sortIndexMeta,
@@ -1213,6 +1306,22 @@ class $FoldersTable extends Folders with TableInfo<$FoldersTable, Folder> {
         DriftSqlType.bool,
         data['${effectivePrefix}is_subscribed'],
       )!,
+      visible: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}visible'],
+      )!,
+      syncEnabled: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}sync_enabled'],
+      )!,
+      notificationsEnabled: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}notifications_enabled'],
+      )!,
+      unified: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}unified'],
+      )!,
       sortIndex: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}sort_index'],
@@ -1248,6 +1357,18 @@ class Folder extends DataClass implements Insertable<Folder> {
 
   /// 是否可被 IDLE/同步监听（如 INBOX）。
   final bool isSubscribed;
+
+  /// 是否在抽屉的文件夹列表中显示（用户级偏好，不影响同步本身）。
+  final bool visible;
+
+  /// 是否同步此文件夹的邮件（与账户级同步范围共同决定，二者皆真才同步）。
+  final bool syncEnabled;
+
+  /// 此文件夹收到新邮件时是否通知。
+  final bool notificationsEnabled;
+
+  /// 是否纳入统一账户的聚合视图（统一收件箱/已发送/草稿）。
+  final bool unified;
   final int sortIndex;
   const Folder({
     required this.id,
@@ -1259,6 +1380,10 @@ class Folder extends DataClass implements Insertable<Folder> {
     required this.unreadCount,
     required this.totalCount,
     required this.isSubscribed,
+    required this.visible,
+    required this.syncEnabled,
+    required this.notificationsEnabled,
+    required this.unified,
     required this.sortIndex,
   });
   @override
@@ -1279,6 +1404,10 @@ class Folder extends DataClass implements Insertable<Folder> {
     map['unread_count'] = Variable<int>(unreadCount);
     map['total_count'] = Variable<int>(totalCount);
     map['is_subscribed'] = Variable<bool>(isSubscribed);
+    map['visible'] = Variable<bool>(visible);
+    map['sync_enabled'] = Variable<bool>(syncEnabled);
+    map['notifications_enabled'] = Variable<bool>(notificationsEnabled);
+    map['unified'] = Variable<bool>(unified);
     map['sort_index'] = Variable<int>(sortIndex);
     return map;
   }
@@ -1296,6 +1425,10 @@ class Folder extends DataClass implements Insertable<Folder> {
       unreadCount: Value(unreadCount),
       totalCount: Value(totalCount),
       isSubscribed: Value(isSubscribed),
+      visible: Value(visible),
+      syncEnabled: Value(syncEnabled),
+      notificationsEnabled: Value(notificationsEnabled),
+      unified: Value(unified),
       sortIndex: Value(sortIndex),
     );
   }
@@ -1317,6 +1450,12 @@ class Folder extends DataClass implements Insertable<Folder> {
       unreadCount: serializer.fromJson<int>(json['unreadCount']),
       totalCount: serializer.fromJson<int>(json['totalCount']),
       isSubscribed: serializer.fromJson<bool>(json['isSubscribed']),
+      visible: serializer.fromJson<bool>(json['visible']),
+      syncEnabled: serializer.fromJson<bool>(json['syncEnabled']),
+      notificationsEnabled: serializer.fromJson<bool>(
+        json['notificationsEnabled'],
+      ),
+      unified: serializer.fromJson<bool>(json['unified']),
       sortIndex: serializer.fromJson<int>(json['sortIndex']),
     );
   }
@@ -1335,6 +1474,10 @@ class Folder extends DataClass implements Insertable<Folder> {
       'unreadCount': serializer.toJson<int>(unreadCount),
       'totalCount': serializer.toJson<int>(totalCount),
       'isSubscribed': serializer.toJson<bool>(isSubscribed),
+      'visible': serializer.toJson<bool>(visible),
+      'syncEnabled': serializer.toJson<bool>(syncEnabled),
+      'notificationsEnabled': serializer.toJson<bool>(notificationsEnabled),
+      'unified': serializer.toJson<bool>(unified),
       'sortIndex': serializer.toJson<int>(sortIndex),
     };
   }
@@ -1349,6 +1492,10 @@ class Folder extends DataClass implements Insertable<Folder> {
     int? unreadCount,
     int? totalCount,
     bool? isSubscribed,
+    bool? visible,
+    bool? syncEnabled,
+    bool? notificationsEnabled,
+    bool? unified,
     int? sortIndex,
   }) => Folder(
     id: id ?? this.id,
@@ -1360,6 +1507,10 @@ class Folder extends DataClass implements Insertable<Folder> {
     unreadCount: unreadCount ?? this.unreadCount,
     totalCount: totalCount ?? this.totalCount,
     isSubscribed: isSubscribed ?? this.isSubscribed,
+    visible: visible ?? this.visible,
+    syncEnabled: syncEnabled ?? this.syncEnabled,
+    notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
+    unified: unified ?? this.unified,
     sortIndex: sortIndex ?? this.sortIndex,
   );
   Folder copyWithCompanion(FoldersCompanion data) {
@@ -1383,6 +1534,14 @@ class Folder extends DataClass implements Insertable<Folder> {
       isSubscribed: data.isSubscribed.present
           ? data.isSubscribed.value
           : this.isSubscribed,
+      visible: data.visible.present ? data.visible.value : this.visible,
+      syncEnabled: data.syncEnabled.present
+          ? data.syncEnabled.value
+          : this.syncEnabled,
+      notificationsEnabled: data.notificationsEnabled.present
+          ? data.notificationsEnabled.value
+          : this.notificationsEnabled,
+      unified: data.unified.present ? data.unified.value : this.unified,
       sortIndex: data.sortIndex.present ? data.sortIndex.value : this.sortIndex,
     );
   }
@@ -1399,6 +1558,10 @@ class Folder extends DataClass implements Insertable<Folder> {
           ..write('unreadCount: $unreadCount, ')
           ..write('totalCount: $totalCount, ')
           ..write('isSubscribed: $isSubscribed, ')
+          ..write('visible: $visible, ')
+          ..write('syncEnabled: $syncEnabled, ')
+          ..write('notificationsEnabled: $notificationsEnabled, ')
+          ..write('unified: $unified, ')
           ..write('sortIndex: $sortIndex')
           ..write(')'))
         .toString();
@@ -1415,6 +1578,10 @@ class Folder extends DataClass implements Insertable<Folder> {
     unreadCount,
     totalCount,
     isSubscribed,
+    visible,
+    syncEnabled,
+    notificationsEnabled,
+    unified,
     sortIndex,
   );
   @override
@@ -1430,6 +1597,10 @@ class Folder extends DataClass implements Insertable<Folder> {
           other.unreadCount == this.unreadCount &&
           other.totalCount == this.totalCount &&
           other.isSubscribed == this.isSubscribed &&
+          other.visible == this.visible &&
+          other.syncEnabled == this.syncEnabled &&
+          other.notificationsEnabled == this.notificationsEnabled &&
+          other.unified == this.unified &&
           other.sortIndex == this.sortIndex);
 }
 
@@ -1443,6 +1614,10 @@ class FoldersCompanion extends UpdateCompanion<Folder> {
   final Value<int> unreadCount;
   final Value<int> totalCount;
   final Value<bool> isSubscribed;
+  final Value<bool> visible;
+  final Value<bool> syncEnabled;
+  final Value<bool> notificationsEnabled;
+  final Value<bool> unified;
   final Value<int> sortIndex;
   final Value<int> rowid;
   const FoldersCompanion({
@@ -1455,6 +1630,10 @@ class FoldersCompanion extends UpdateCompanion<Folder> {
     this.unreadCount = const Value.absent(),
     this.totalCount = const Value.absent(),
     this.isSubscribed = const Value.absent(),
+    this.visible = const Value.absent(),
+    this.syncEnabled = const Value.absent(),
+    this.notificationsEnabled = const Value.absent(),
+    this.unified = const Value.absent(),
     this.sortIndex = const Value.absent(),
     this.rowid = const Value.absent(),
   });
@@ -1468,6 +1647,10 @@ class FoldersCompanion extends UpdateCompanion<Folder> {
     this.unreadCount = const Value.absent(),
     this.totalCount = const Value.absent(),
     this.isSubscribed = const Value.absent(),
+    this.visible = const Value.absent(),
+    this.syncEnabled = const Value.absent(),
+    this.notificationsEnabled = const Value.absent(),
+    this.unified = const Value.absent(),
     this.sortIndex = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
@@ -1485,6 +1668,10 @@ class FoldersCompanion extends UpdateCompanion<Folder> {
     Expression<int>? unreadCount,
     Expression<int>? totalCount,
     Expression<bool>? isSubscribed,
+    Expression<bool>? visible,
+    Expression<bool>? syncEnabled,
+    Expression<bool>? notificationsEnabled,
+    Expression<bool>? unified,
     Expression<int>? sortIndex,
     Expression<int>? rowid,
   }) {
@@ -1498,6 +1685,11 @@ class FoldersCompanion extends UpdateCompanion<Folder> {
       if (unreadCount != null) 'unread_count': unreadCount,
       if (totalCount != null) 'total_count': totalCount,
       if (isSubscribed != null) 'is_subscribed': isSubscribed,
+      if (visible != null) 'visible': visible,
+      if (syncEnabled != null) 'sync_enabled': syncEnabled,
+      if (notificationsEnabled != null)
+        'notifications_enabled': notificationsEnabled,
+      if (unified != null) 'unified': unified,
       if (sortIndex != null) 'sort_index': sortIndex,
       if (rowid != null) 'rowid': rowid,
     });
@@ -1513,6 +1705,10 @@ class FoldersCompanion extends UpdateCompanion<Folder> {
     Value<int>? unreadCount,
     Value<int>? totalCount,
     Value<bool>? isSubscribed,
+    Value<bool>? visible,
+    Value<bool>? syncEnabled,
+    Value<bool>? notificationsEnabled,
+    Value<bool>? unified,
     Value<int>? sortIndex,
     Value<int>? rowid,
   }) {
@@ -1526,6 +1722,10 @@ class FoldersCompanion extends UpdateCompanion<Folder> {
       unreadCount: unreadCount ?? this.unreadCount,
       totalCount: totalCount ?? this.totalCount,
       isSubscribed: isSubscribed ?? this.isSubscribed,
+      visible: visible ?? this.visible,
+      syncEnabled: syncEnabled ?? this.syncEnabled,
+      notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
+      unified: unified ?? this.unified,
       sortIndex: sortIndex ?? this.sortIndex,
       rowid: rowid ?? this.rowid,
     );
@@ -1563,6 +1763,18 @@ class FoldersCompanion extends UpdateCompanion<Folder> {
     if (isSubscribed.present) {
       map['is_subscribed'] = Variable<bool>(isSubscribed.value);
     }
+    if (visible.present) {
+      map['visible'] = Variable<bool>(visible.value);
+    }
+    if (syncEnabled.present) {
+      map['sync_enabled'] = Variable<bool>(syncEnabled.value);
+    }
+    if (notificationsEnabled.present) {
+      map['notifications_enabled'] = Variable<bool>(notificationsEnabled.value);
+    }
+    if (unified.present) {
+      map['unified'] = Variable<bool>(unified.value);
+    }
     if (sortIndex.present) {
       map['sort_index'] = Variable<int>(sortIndex.value);
     }
@@ -1584,6 +1796,10 @@ class FoldersCompanion extends UpdateCompanion<Folder> {
           ..write('unreadCount: $unreadCount, ')
           ..write('totalCount: $totalCount, ')
           ..write('isSubscribed: $isSubscribed, ')
+          ..write('visible: $visible, ')
+          ..write('syncEnabled: $syncEnabled, ')
+          ..write('notificationsEnabled: $notificationsEnabled, ')
+          ..write('unified: $unified, ')
           ..write('sortIndex: $sortIndex, ')
           ..write('rowid: $rowid')
           ..write(')'))
@@ -1661,6 +1877,17 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
   @override
   late final GeneratedColumn<String> graphMessageId = GeneratedColumn<String>(
     'graph_message_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _gmailMessageIdMeta = const VerificationMeta(
+    'gmailMessageId',
+  );
+  @override
+  late final GeneratedColumn<String> gmailMessageId = GeneratedColumn<String>(
+    'gmail_message_id',
     aliasedName,
     true,
     type: DriftSqlType.string,
@@ -1812,6 +2039,7 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     imapUid,
     imapUidValidity,
     graphMessageId,
+    gmailMessageId,
     subject,
     fromName,
     fromEmail,
@@ -1879,6 +2107,15 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
         graphMessageId.isAcceptableOrUnknown(
           data['graph_message_id']!,
           _graphMessageIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('gmail_message_id')) {
+      context.handle(
+        _gmailMessageIdMeta,
+        gmailMessageId.isAcceptableOrUnknown(
+          data['gmail_message_id']!,
+          _gmailMessageIdMeta,
         ),
       );
     }
@@ -1980,6 +2217,7 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
   List<Set<GeneratedColumn>> get uniqueKeys => [
     {folderId, imapUid},
     {accountId, graphMessageId},
+    {accountId, gmailMessageId},
   ];
   @override
   Message map(Map<String, dynamic> data, {String? tablePrefix}) {
@@ -2008,6 +2246,10 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
       graphMessageId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}graph_message_id'],
+      ),
+      gmailMessageId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}gmail_message_id'],
       ),
       subject: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
@@ -2080,6 +2322,9 @@ class Message extends DataClass implements Insertable<Message> {
 
   /// Graph：immutable message id。
   final String? graphMessageId;
+
+  /// Gmail：REST API 的 message id（全邮箱唯一）。
+  final String? gmailMessageId;
   final String subject;
   final String? fromName;
   final String? fromEmail;
@@ -2111,6 +2356,7 @@ class Message extends DataClass implements Insertable<Message> {
     this.imapUid,
     this.imapUidValidity,
     this.graphMessageId,
+    this.gmailMessageId,
     required this.subject,
     this.fromName,
     this.fromEmail,
@@ -2138,6 +2384,9 @@ class Message extends DataClass implements Insertable<Message> {
     }
     if (!nullToAbsent || graphMessageId != null) {
       map['graph_message_id'] = Variable<String>(graphMessageId);
+    }
+    if (!nullToAbsent || gmailMessageId != null) {
+      map['gmail_message_id'] = Variable<String>(gmailMessageId);
     }
     map['subject'] = Variable<String>(subject);
     if (!nullToAbsent || fromName != null) {
@@ -2176,6 +2425,9 @@ class Message extends DataClass implements Insertable<Message> {
       graphMessageId: graphMessageId == null && nullToAbsent
           ? const Value.absent()
           : Value(graphMessageId),
+      gmailMessageId: gmailMessageId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(gmailMessageId),
       subject: Value(subject),
       fromName: fromName == null && nullToAbsent
           ? const Value.absent()
@@ -2211,6 +2463,7 @@ class Message extends DataClass implements Insertable<Message> {
       imapUid: serializer.fromJson<int?>(json['imapUid']),
       imapUidValidity: serializer.fromJson<int?>(json['imapUidValidity']),
       graphMessageId: serializer.fromJson<String?>(json['graphMessageId']),
+      gmailMessageId: serializer.fromJson<String?>(json['gmailMessageId']),
       subject: serializer.fromJson<String>(json['subject']),
       fromName: serializer.fromJson<String?>(json['fromName']),
       fromEmail: serializer.fromJson<String?>(json['fromEmail']),
@@ -2235,6 +2488,7 @@ class Message extends DataClass implements Insertable<Message> {
       'imapUid': serializer.toJson<int?>(imapUid),
       'imapUidValidity': serializer.toJson<int?>(imapUidValidity),
       'graphMessageId': serializer.toJson<String?>(graphMessageId),
+      'gmailMessageId': serializer.toJson<String?>(gmailMessageId),
       'subject': serializer.toJson<String>(subject),
       'fromName': serializer.toJson<String?>(fromName),
       'fromEmail': serializer.toJson<String?>(fromEmail),
@@ -2257,6 +2511,7 @@ class Message extends DataClass implements Insertable<Message> {
     Value<int?> imapUid = const Value.absent(),
     Value<int?> imapUidValidity = const Value.absent(),
     Value<String?> graphMessageId = const Value.absent(),
+    Value<String?> gmailMessageId = const Value.absent(),
     String? subject,
     Value<String?> fromName = const Value.absent(),
     Value<String?> fromEmail = const Value.absent(),
@@ -2280,6 +2535,9 @@ class Message extends DataClass implements Insertable<Message> {
     graphMessageId: graphMessageId.present
         ? graphMessageId.value
         : this.graphMessageId,
+    gmailMessageId: gmailMessageId.present
+        ? gmailMessageId.value
+        : this.gmailMessageId,
     subject: subject ?? this.subject,
     fromName: fromName.present ? fromName.value : this.fromName,
     fromEmail: fromEmail.present ? fromEmail.value : this.fromEmail,
@@ -2307,6 +2565,9 @@ class Message extends DataClass implements Insertable<Message> {
       graphMessageId: data.graphMessageId.present
           ? data.graphMessageId.value
           : this.graphMessageId,
+      gmailMessageId: data.gmailMessageId.present
+          ? data.gmailMessageId.value
+          : this.gmailMessageId,
       subject: data.subject.present ? data.subject.value : this.subject,
       fromName: data.fromName.present ? data.fromName.value : this.fromName,
       fromEmail: data.fromEmail.present ? data.fromEmail.value : this.fromEmail,
@@ -2341,6 +2602,7 @@ class Message extends DataClass implements Insertable<Message> {
           ..write('imapUid: $imapUid, ')
           ..write('imapUidValidity: $imapUidValidity, ')
           ..write('graphMessageId: $graphMessageId, ')
+          ..write('gmailMessageId: $gmailMessageId, ')
           ..write('subject: $subject, ')
           ..write('fromName: $fromName, ')
           ..write('fromEmail: $fromEmail, ')
@@ -2365,6 +2627,7 @@ class Message extends DataClass implements Insertable<Message> {
     imapUid,
     imapUidValidity,
     graphMessageId,
+    gmailMessageId,
     subject,
     fromName,
     fromEmail,
@@ -2388,6 +2651,7 @@ class Message extends DataClass implements Insertable<Message> {
           other.imapUid == this.imapUid &&
           other.imapUidValidity == this.imapUidValidity &&
           other.graphMessageId == this.graphMessageId &&
+          other.gmailMessageId == this.gmailMessageId &&
           other.subject == this.subject &&
           other.fromName == this.fromName &&
           other.fromEmail == this.fromEmail &&
@@ -2409,6 +2673,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
   final Value<int?> imapUid;
   final Value<int?> imapUidValidity;
   final Value<String?> graphMessageId;
+  final Value<String?> gmailMessageId;
   final Value<String> subject;
   final Value<String?> fromName;
   final Value<String?> fromEmail;
@@ -2429,6 +2694,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     this.imapUid = const Value.absent(),
     this.imapUidValidity = const Value.absent(),
     this.graphMessageId = const Value.absent(),
+    this.gmailMessageId = const Value.absent(),
     this.subject = const Value.absent(),
     this.fromName = const Value.absent(),
     this.fromEmail = const Value.absent(),
@@ -2450,6 +2716,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     this.imapUid = const Value.absent(),
     this.imapUidValidity = const Value.absent(),
     this.graphMessageId = const Value.absent(),
+    this.gmailMessageId = const Value.absent(),
     this.subject = const Value.absent(),
     this.fromName = const Value.absent(),
     this.fromEmail = const Value.absent(),
@@ -2474,6 +2741,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Expression<int>? imapUid,
     Expression<int>? imapUidValidity,
     Expression<String>? graphMessageId,
+    Expression<String>? gmailMessageId,
     Expression<String>? subject,
     Expression<String>? fromName,
     Expression<String>? fromEmail,
@@ -2495,6 +2763,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       if (imapUid != null) 'imap_uid': imapUid,
       if (imapUidValidity != null) 'imap_uid_validity': imapUidValidity,
       if (graphMessageId != null) 'graph_message_id': graphMessageId,
+      if (gmailMessageId != null) 'gmail_message_id': gmailMessageId,
       if (subject != null) 'subject': subject,
       if (fromName != null) 'from_name': fromName,
       if (fromEmail != null) 'from_email': fromEmail,
@@ -2518,6 +2787,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Value<int?>? imapUid,
     Value<int?>? imapUidValidity,
     Value<String?>? graphMessageId,
+    Value<String?>? gmailMessageId,
     Value<String>? subject,
     Value<String?>? fromName,
     Value<String?>? fromEmail,
@@ -2539,6 +2809,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       imapUid: imapUid ?? this.imapUid,
       imapUidValidity: imapUidValidity ?? this.imapUidValidity,
       graphMessageId: graphMessageId ?? this.graphMessageId,
+      gmailMessageId: gmailMessageId ?? this.gmailMessageId,
       subject: subject ?? this.subject,
       fromName: fromName ?? this.fromName,
       fromEmail: fromEmail ?? this.fromEmail,
@@ -2575,6 +2846,9 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     }
     if (graphMessageId.present) {
       map['graph_message_id'] = Variable<String>(graphMessageId.value);
+    }
+    if (gmailMessageId.present) {
+      map['gmail_message_id'] = Variable<String>(gmailMessageId.value);
     }
     if (subject.present) {
       map['subject'] = Variable<String>(subject.value);
@@ -2627,6 +2901,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
           ..write('imapUid: $imapUid, ')
           ..write('imapUidValidity: $imapUidValidity, ')
           ..write('graphMessageId: $graphMessageId, ')
+          ..write('gmailMessageId: $gmailMessageId, ')
           ..write('subject: $subject, ')
           ..write('fromName: $fromName, ')
           ..write('fromEmail: $fromEmail, ')
@@ -4806,6 +5081,10 @@ typedef $$FoldersTableCreateCompanionBuilder =
       Value<int> unreadCount,
       Value<int> totalCount,
       Value<bool> isSubscribed,
+      Value<bool> visible,
+      Value<bool> syncEnabled,
+      Value<bool> notificationsEnabled,
+      Value<bool> unified,
       Value<int> sortIndex,
       Value<int> rowid,
     });
@@ -4820,6 +5099,10 @@ typedef $$FoldersTableUpdateCompanionBuilder =
       Value<int> unreadCount,
       Value<int> totalCount,
       Value<bool> isSubscribed,
+      Value<bool> visible,
+      Value<bool> syncEnabled,
+      Value<bool> notificationsEnabled,
+      Value<bool> unified,
       Value<int> sortIndex,
       Value<int> rowid,
     });
@@ -4930,6 +5213,26 @@ class $$FoldersTableFilterComposer
 
   ColumnFilters<bool> get isSubscribed => $composableBuilder(
     column: $table.isSubscribed,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get visible => $composableBuilder(
+    column: $table.visible,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get syncEnabled => $composableBuilder(
+    column: $table.syncEnabled,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get notificationsEnabled => $composableBuilder(
+    column: $table.notificationsEnabled,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get unified => $composableBuilder(
+    column: $table.unified,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -5061,6 +5364,26 @@ class $$FoldersTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<bool> get visible => $composableBuilder(
+    column: $table.visible,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get syncEnabled => $composableBuilder(
+    column: $table.syncEnabled,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get notificationsEnabled => $composableBuilder(
+    column: $table.notificationsEnabled,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get unified => $composableBuilder(
+    column: $table.unified,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<int> get sortIndex => $composableBuilder(
     column: $table.sortIndex,
     builder: (column) => ColumnOrderings(column),
@@ -5133,6 +5456,22 @@ class $$FoldersTableAnnotationComposer
     column: $table.isSubscribed,
     builder: (column) => column,
   );
+
+  GeneratedColumn<bool> get visible =>
+      $composableBuilder(column: $table.visible, builder: (column) => column);
+
+  GeneratedColumn<bool> get syncEnabled => $composableBuilder(
+    column: $table.syncEnabled,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<bool> get notificationsEnabled => $composableBuilder(
+    column: $table.notificationsEnabled,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<bool> get unified =>
+      $composableBuilder(column: $table.unified, builder: (column) => column);
 
   GeneratedColumn<int> get sortIndex =>
       $composableBuilder(column: $table.sortIndex, builder: (column) => column);
@@ -5252,6 +5591,10 @@ class $$FoldersTableTableManager
                 Value<int> unreadCount = const Value.absent(),
                 Value<int> totalCount = const Value.absent(),
                 Value<bool> isSubscribed = const Value.absent(),
+                Value<bool> visible = const Value.absent(),
+                Value<bool> syncEnabled = const Value.absent(),
+                Value<bool> notificationsEnabled = const Value.absent(),
+                Value<bool> unified = const Value.absent(),
                 Value<int> sortIndex = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => FoldersCompanion(
@@ -5264,6 +5607,10 @@ class $$FoldersTableTableManager
                 unreadCount: unreadCount,
                 totalCount: totalCount,
                 isSubscribed: isSubscribed,
+                visible: visible,
+                syncEnabled: syncEnabled,
+                notificationsEnabled: notificationsEnabled,
+                unified: unified,
                 sortIndex: sortIndex,
                 rowid: rowid,
               ),
@@ -5278,6 +5625,10 @@ class $$FoldersTableTableManager
                 Value<int> unreadCount = const Value.absent(),
                 Value<int> totalCount = const Value.absent(),
                 Value<bool> isSubscribed = const Value.absent(),
+                Value<bool> visible = const Value.absent(),
+                Value<bool> syncEnabled = const Value.absent(),
+                Value<bool> notificationsEnabled = const Value.absent(),
+                Value<bool> unified = const Value.absent(),
                 Value<int> sortIndex = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => FoldersCompanion.insert(
@@ -5290,6 +5641,10 @@ class $$FoldersTableTableManager
                 unreadCount: unreadCount,
                 totalCount: totalCount,
                 isSubscribed: isSubscribed,
+                visible: visible,
+                syncEnabled: syncEnabled,
+                notificationsEnabled: notificationsEnabled,
+                unified: unified,
                 sortIndex: sortIndex,
                 rowid: rowid,
               ),
@@ -5423,6 +5778,7 @@ typedef $$MessagesTableCreateCompanionBuilder =
       Value<int?> imapUid,
       Value<int?> imapUidValidity,
       Value<String?> graphMessageId,
+      Value<String?> gmailMessageId,
       Value<String> subject,
       Value<String?> fromName,
       Value<String?> fromEmail,
@@ -5445,6 +5801,7 @@ typedef $$MessagesTableUpdateCompanionBuilder =
       Value<int?> imapUid,
       Value<int?> imapUidValidity,
       Value<String?> graphMessageId,
+      Value<String?> gmailMessageId,
       Value<String> subject,
       Value<String?> fromName,
       Value<String?> fromEmail,
@@ -5543,6 +5900,11 @@ class $$MessagesTableFilterComposer
 
   ColumnFilters<String> get graphMessageId => $composableBuilder(
     column: $table.graphMessageId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get gmailMessageId => $composableBuilder(
+    column: $table.gmailMessageId,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -5707,6 +6069,11 @@ class $$MessagesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get gmailMessageId => $composableBuilder(
+    column: $table.gmailMessageId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get subject => $composableBuilder(
     column: $table.subject,
     builder: (column) => ColumnOrderings(column),
@@ -5836,6 +6203,11 @@ class $$MessagesTableAnnotationComposer
 
   GeneratedColumn<String> get graphMessageId => $composableBuilder(
     column: $table.graphMessageId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get gmailMessageId => $composableBuilder(
+    column: $table.gmailMessageId,
     builder: (column) => column,
   );
 
@@ -5995,6 +6367,7 @@ class $$MessagesTableTableManager
                 Value<int?> imapUid = const Value.absent(),
                 Value<int?> imapUidValidity = const Value.absent(),
                 Value<String?> graphMessageId = const Value.absent(),
+                Value<String?> gmailMessageId = const Value.absent(),
                 Value<String> subject = const Value.absent(),
                 Value<String?> fromName = const Value.absent(),
                 Value<String?> fromEmail = const Value.absent(),
@@ -6015,6 +6388,7 @@ class $$MessagesTableTableManager
                 imapUid: imapUid,
                 imapUidValidity: imapUidValidity,
                 graphMessageId: graphMessageId,
+                gmailMessageId: gmailMessageId,
                 subject: subject,
                 fromName: fromName,
                 fromEmail: fromEmail,
@@ -6037,6 +6411,7 @@ class $$MessagesTableTableManager
                 Value<int?> imapUid = const Value.absent(),
                 Value<int?> imapUidValidity = const Value.absent(),
                 Value<String?> graphMessageId = const Value.absent(),
+                Value<String?> gmailMessageId = const Value.absent(),
                 Value<String> subject = const Value.absent(),
                 Value<String?> fromName = const Value.absent(),
                 Value<String?> fromEmail = const Value.absent(),
@@ -6057,6 +6432,7 @@ class $$MessagesTableTableManager
                 imapUid: imapUid,
                 imapUidValidity: imapUidValidity,
                 graphMessageId: graphMessageId,
+                gmailMessageId: gmailMessageId,
                 subject: subject,
                 fromName: fromName,
                 fromEmail: fromEmail,

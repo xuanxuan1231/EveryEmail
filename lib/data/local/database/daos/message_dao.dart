@@ -31,7 +31,8 @@ class MessageDao extends DatabaseAccessor<AppDatabase> with _$MessageDaoMixin {
 
   /// 监听统一账户下某个统一文件夹的邮件。
   ///
-  /// 统一文件夹不复制邮件；这里按文件夹语义角色聚合所有真实账户的来源文件夹。
+  /// 统一文件夹不复制邮件；这里按文件夹语义角色聚合所有真实账户中开启了
+  /// 「统一化」的来源文件夹。
   Stream<List<MessageWithAccount>> watchUnifiedFolderMessages(
     FolderType folderType, {
     int limit = 100,
@@ -42,7 +43,10 @@ class MessageDao extends DatabaseAccessor<AppDatabase> with _$MessageDaoMixin {
             innerJoin(folders, folders.id.equalsExp(messages.folderId)),
             innerJoin(accounts, accounts.id.equalsExp(messages.accountId)),
           ])
-          ..where(folders.folderType.equals(folderType.index))
+          ..where(
+            folders.folderType.equals(folderType.index) &
+                folders.unified.equals(true),
+          )
           ..orderBy([OrderingTerm.desc(messages.date)])
           ..limit(limit);
 
@@ -50,8 +54,10 @@ class MessageDao extends DatabaseAccessor<AppDatabase> with _$MessageDaoMixin {
       return rows.map((row) {
         return MessageWithAccount(
           message: row.readTable(messages),
+          accountId: row.readTable(accounts).id,
           accountEmail: row.readTable(accounts).email,
           accountDisplayName: row.readTable(accounts).displayName,
+          folderType: row.readTable(folders).folderType,
           accountColorValue: row.readTable(accounts).colorValue,
         );
       }).toList();
@@ -98,6 +104,15 @@ class MessageDao extends DatabaseAccessor<AppDatabase> with _$MessageDaoMixin {
         .getSingleOrNull();
   }
 
+  /// 按 Gmail message id 查找（同步对账）。
+  Future<Message?> getByGmailId(String accountId, String gmailId) {
+    return (select(messages)..where(
+          (t) =>
+              t.accountId.equals(accountId) & t.gmailMessageId.equals(gmailId),
+        ))
+        .getSingleOrNull();
+  }
+
   /// 文件夹内最大 UID（增量起点）。
   Future<int?> maxImapUid(String folderId) async {
     final expr = messages.imapUid.max();
@@ -121,6 +136,12 @@ class MessageDao extends DatabaseAccessor<AppDatabase> with _$MessageDaoMixin {
   Future<void> updateFlags(String id, int flagsBitmask) {
     return (update(messages)..where((t) => t.id.equals(id))).write(
       MessagesCompanion(flagsBitmask: Value(flagsBitmask)),
+    );
+  }
+
+  Future<void> moveMessage(String id, String folderId) {
+    return (update(messages)..where((t) => t.id.equals(id))).write(
+      MessagesCompanion(folderId: Value(folderId)),
     );
   }
 
@@ -151,6 +172,41 @@ class MessageDao extends DatabaseAccessor<AppDatabase> with _$MessageDaoMixin {
 
   Future<void> upsertBody(MessageBodiesCompanion body) {
     return into(messageBodies).insertOnConflictUpdate(body);
+  }
+
+  /// 仅更新正文行的附件元数据 JSON（附件下载完成后回写 localPath），不触碰其它列。
+  Future<void> updateAttachmentsMeta(String messageId, String meta) {
+    return (update(messageBodies)..where((t) => t.messageId.equals(messageId)))
+        .write(MessageBodiesCompanion(attachmentsMeta: Value(meta)));
+  }
+
+  /// 某文件夹中"尚无正文（或仅信封、未下载）"的邮件 id，按日期倒序。
+  ///
+  /// 供后台预取取最新 N 封：左连接 [MessageBodies]，筛掉已下载的（有正文行
+  /// 且 fetchState 非 notDownloaded），其余按 date 倒序取前 [limit]。
+  Future<List<String>> messageIdsNeedingBody(
+    String folderId, {
+    int limit = 25,
+  }) async {
+    final query =
+        select(messages).join([
+            leftOuterJoin(
+              messageBodies,
+              messageBodies.messageId.equalsExp(messages.id),
+            ),
+          ])
+          ..where(
+            messages.folderId.equals(folderId) &
+                (messageBodies.messageId.isNull() |
+                    messageBodies.fetchState.equals(
+                      BodyFetchState.notDownloaded.index,
+                    )),
+          )
+          ..orderBy([OrderingTerm.desc(messages.date)])
+          ..limit(limit);
+
+    final rows = await query.get();
+    return rows.map((row) => row.readTable(messages).id).toList();
   }
 
   // —— 同步游标 ——
@@ -195,8 +251,10 @@ class MessageDao extends DatabaseAccessor<AppDatabase> with _$MessageDaoMixin {
     return rows.map((row) {
       return MessageWithAccount(
         message: row.readTable(messages),
+        accountId: row.readTable(accounts).id,
         accountEmail: row.readTable(accounts).email,
         accountDisplayName: row.readTable(accounts).displayName,
+        folderType: row.readTable(folders).folderType,
         accountColorValue: row.readTable(accounts).colorValue,
       );
     }).toList();
