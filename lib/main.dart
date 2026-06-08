@@ -6,6 +6,7 @@ import 'app/bootstrap.dart';
 import 'app/fcm_bootstrap.dart';
 import 'app/providers.dart';
 import 'app/realtime_sync_coordinator.dart';
+import 'core/platform/webview_warmer.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -17,10 +18,18 @@ Future<void> main() async {
     ProviderScope(
       overrides: [
         databaseProvider.overrideWithValue(result.database),
-        appFontProvider.overrideWith((ref) => AppFontController(result.appFont)),
+        packageInfoProvider.overrideWithValue(result.packageInfo),
+        appFontProvider.overrideWith(
+          (ref) => AppFontController(result.appFont),
+        ),
+        displaySettingsProvider.overrideWith(
+          (ref) => DisplaySettingsController(result.displaySettings),
+        ),
       ],
       child: const FcmBootstrap(
-        child: RealtimeSyncCoordinator(child: EveryMailApp()),
+        child: RealtimeSyncCoordinator(
+          child: WebViewWarmer(child: EveryMailApp()),
+        ),
       ),
     ),
   );

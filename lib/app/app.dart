@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/theme/app_theme.dart';
 import '../core/theme/color_schemes.dart';
+import '../data/settings/display_settings.dart';
 import 'providers.dart';
 import 'router.dart';
 
@@ -18,6 +19,7 @@ class EveryMailApp extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     // 字体偏好：变化时整套主题重建，全应用字体即时切换。
     final appFont = ref.watch(appFontProvider);
+    final displaySettings = ref.watch(displaySettingsProvider);
 
     return DynamicColorBuilder(
       builder: (ColorScheme? lightDynamic, ColorScheme? darkDynamic) {
@@ -31,9 +33,18 @@ class EveryMailApp extends ConsumerWidget {
           debugShowCheckedModeBanner: false,
           theme: AppTheme.light(lightScheme, appFont),
           darkTheme: AppTheme.dark(darkScheme, appFont),
+          themeMode: _themeMode(displaySettings.colorMode),
           routerConfig: appRouter,
         );
       },
     );
+  }
+
+  ThemeMode _themeMode(AppColorMode colorMode) {
+    return switch (colorMode) {
+      AppColorMode.system => ThemeMode.system,
+      AppColorMode.light => ThemeMode.light,
+      AppColorMode.dark => ThemeMode.dark,
+    };
   }
 }
