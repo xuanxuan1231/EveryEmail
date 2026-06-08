@@ -7,7 +7,10 @@ import 'package:m3e_core/m3e_core.dart';
 
 import '../../app/providers.dart';
 import '../../core/navigation/predictive_back_shared_element.dart';
+import '../../core/theme/mail_list_colors.dart';
 import '../../data/local/database/message_with_account.dart';
+import '../../data/settings/account_settings.dart';
+import '../../data/settings/display_settings.dart';
 import '../home/widgets/gmail_mobile_message_item.dart';
 
 /// 邮件搜索页面。
@@ -32,6 +35,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   bool _isSearching = false;
   bool _hasSearched = false;
   bool _hasQuery = false;
+  bool _resultsScrolledUnder = false;
   Timer? _searchDebounce;
   int _searchRequestSerial = 0;
 
@@ -63,6 +67,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
         _searchResults = [];
         _isSearching = false;
         _hasSearched = false;
+        _resultsScrolledUnder = false;
       });
       return;
     }
@@ -89,12 +94,22 @@ class _SearchPageState extends ConsumerState<SearchPage> {
 
     try {
       final db = ref.read(databaseProvider);
-      final results = await db.messageDao.searchMessages(query, limit: 100);
+      final rawResults = await db.messageDao.searchMessages(query, limit: 100);
+      final accountSettings = await AccountSettingsStore.readMany(
+        rawResults.map((item) => item.accountId),
+      );
+      final results = [
+        for (final item in rawResults)
+          if ((accountSettings[item.accountId] ?? AccountSettings.defaults)
+              .canSearchFolder(item.folderType))
+            item,
+      ];
 
       if (mounted && requestId == _searchRequestSerial) {
         setState(() {
           _searchResults = results;
           _isSearching = false;
+          _resultsScrolledUnder = false;
         });
       }
     } catch (e) {
@@ -112,9 +127,26 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final displaySettings = ref.watch(displaySettingsProvider);
+    final appBarScrolledUnder =
+        !_isSearching &&
+        _hasSearched &&
+        _searchResults.isNotEmpty &&
+        _resultsScrolledUnder;
 
     return Scaffold(
       appBar: AppBar(
+        backgroundColor: appBarScrolledUnder
+            ? mailListAppBarSurfaceColor(theme)
+            : theme.colorScheme.surface,
+        surfaceTintColor: Colors.transparent,
+        scrolledUnderElevation: 0,
+        shadowColor: Colors.transparent,
+        shape: appBarScrolledUnder
+            ? Border(
+                bottom: BorderSide(color: mailListAppBarDividerColor(theme)),
+              )
+            : null,
         title: TextField(
           controller: _searchController,
           focusNode: _searchFocusNode,
@@ -149,11 +181,27 @@ class _SearchPageState extends ConsumerState<SearchPage> {
             ),
         ],
       ),
-      body: _buildBody(theme),
+      body: NotificationListener<ScrollNotification>(
+        onNotification: _handleScrollNotification,
+        child: _buildBody(theme, displaySettings),
+      ),
     );
   }
 
-  Widget _buildBody(ThemeData theme) {
+  bool _handleScrollNotification(ScrollNotification notification) {
+    if (notification.metrics.axis != Axis.vertical) return false;
+
+    final scrolledUnder = notification.metrics.extentBefore > 0.5;
+    if (scrolledUnder != _resultsScrolledUnder) {
+      setState(() {
+        _resultsScrolledUnder = scrolledUnder;
+      });
+    }
+
+    return false;
+  }
+
+  Widget _buildBody(ThemeData theme, DisplaySettings displaySettings) {
     // 正在搜索
     if (_isSearching) {
       return const Center(child: CircularProgressIndicator());
@@ -170,7 +218,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     }
 
     // 显示结果
-    return _buildResults(theme);
+    return _buildResults(theme, displaySettings);
   }
 
   Widget _buildEmptyState(ThemeData theme) {
@@ -231,7 +279,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     );
   }
 
-  Widget _buildResults(ThemeData theme) {
+  Widget _buildResults(ThemeData theme, DisplaySettings displaySettings) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -256,7 +304,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
             gap: 3,
             outerRadius: 24,
             innerRadius: 4,
-            color: theme.colorScheme.surfaceContainerHighest,
+            color: mailListSurfaceColor(theme),
             physics: const AlwaysScrollableScrollPhysics(),
             splashColor: theme.colorScheme.primary.withValues(alpha: 0.08),
             highlightColor: theme.colorScheme.primary.withValues(alpha: 0.04),
@@ -290,6 +338,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                   accountEmail: item.accountEmail,
                   accountColor: accountColor,
                   showAccountLabel: true,
+                  displaySettings: displaySettings,
                 );
               }
 
@@ -300,12 +349,14 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                   index,
                   _searchResults.length,
                 ),
+                backgroundColor: mailListSurfaceColor(theme),
                 previewBuilder: buildPreview,
                 child: GmailMobileMessageCardContent(
                   message: message,
                   accountEmail: item.accountEmail,
                   accountColor: accountColor,
                   showAccountLabel: true,
+                  displaySettings: displaySettings,
                   onStarTap: () {
                     // TODO: 实现星标切换
                     debugPrint('切换星标: ${message.id}');

@@ -43,11 +43,42 @@ final GoRouter appRouter = GoRouter(
       path: '/settings',
       builder: (context, state) => const SettingsPage(),
     ),
+    GoRoute(
+      path: '/settings/display',
+      builder: (context, state) => const DisplaySettingsPage(),
+    ),
+    GoRoute(
+      path: '/settings/notifications',
+      builder: (context, state) => const NotificationSettingsPage(),
+    ),
+    GoRoute(
+      path: '/settings/about',
+      builder: (context, state) => const AboutPage(),
+    ),
+    GoRoute(
+      path: '/settings/about/licenses',
+      builder: (context, state) => const AppLicensePage(),
+    ),
+    GoRoute(
+      path: '/settings/accounts/:id',
+      builder: (context, state) {
+        final accountId = state.pathParameters['id']!;
+        return AccountSettingsPage(accountId: accountId);
+      },
+    ),
+    GoRoute(
+      path: '/settings/accounts/:id/folders',
+      builder: (context, state) {
+        final accountId = state.pathParameters['id']!;
+        return AccountFoldersPage(accountId: accountId);
+      },
+    ),
 
     // 账户向导
     GoRoute(
       path: '/onboarding/add',
-      builder: (context, state) => const AddAccountPage(),
+      builder: (context, state) =>
+          AddAccountPage(returnId: state.uri.queryParameters['returnId']),
     ),
     GoRoute(
       path: '/onboarding/manual',
