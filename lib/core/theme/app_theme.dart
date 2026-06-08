@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' show clampDouble, lerpDouble;
 
@@ -6,8 +7,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show PredictiveBackEvent, SwipeEdge;
 
 import '../navigation/predictive_back_shared_element.dart';
+import '../navigation/predictive_back_transition_scope.dart';
 import '../../data/settings/app_font_settings.dart';
 import 'expressive_colors.dart';
+import 'mail_list_colors.dart';
 import 'motion_tokens.dart';
 import 'shape_scale.dart';
 import 'typography.dart';
@@ -84,35 +87,51 @@ class SnapshottingPredictiveBackPageTransitionsBuilder
     Animation<double> secondaryAnimation,
     Widget child,
   ) {
-    final snapshotChild = _PredictiveBackGestureSnapshot(
-      route: route,
-      child: child,
-    );
-
     return _ShadowedPredictiveBackGestureDetector(
       route: route,
-      builder: (context, phase, startBackEvent, currentBackEvent) {
-        if (route.popGestureInProgress) {
-          return _ShadowedPredictiveBackSharedElementPageTransition(
-            animation: animation,
-            phase: phase,
-            secondaryAnimation: secondaryAnimation,
-            startBackEvent: startBackEvent,
-            currentBackEvent: currentBackEvent,
-            child: snapshotChild,
-          );
-        }
+      builder:
+          (
+            context,
+            phase,
+            startBackEvent,
+            currentBackEvent,
+            finishCommitBackGesture,
+          ) {
+            final usePredictiveBackTransition =
+                route.popGestureInProgress ||
+                phase == _ShadowedPredictiveBackPhase.commit;
+            final scopedChild = _PredictiveBackGestureSnapshot(
+              route: route,
+              active: usePredictiveBackTransition,
+              child: PredictiveBackTransitionScope(
+                active: usePredictiveBackTransition,
+                committing: phase == _ShadowedPredictiveBackPhase.commit,
+                child: child,
+              ),
+            );
+            if (usePredictiveBackTransition) {
+              return _ShadowedPredictiveBackSharedElementPageTransition(
+                animation: animation,
+                phase: phase,
+                secondaryAnimation: secondaryAnimation,
+                startBackEvent: startBackEvent,
+                currentBackEvent: currentBackEvent,
+                onCommitBackGestureFinished: finishCommitBackGesture,
+                route: route,
+                child: scopedChild,
+              );
+            }
 
-        return FadeForwardsPageTransitionsBuilder(
-          backgroundColor: fallbackColor,
-        ).buildTransitions(
-          route,
-          context,
-          animation,
-          secondaryAnimation,
-          snapshotChild,
-        );
-      },
+            return FadeForwardsPageTransitionsBuilder(
+              backgroundColor: fallbackColor,
+            ).buildTransitions(
+              route,
+              context,
+              animation,
+              secondaryAnimation,
+              scopedChild,
+            );
+          },
     );
   }
 }
@@ -123,9 +142,13 @@ typedef _ShadowedPredictiveBackGestureBuilder =
       _ShadowedPredictiveBackPhase phase,
       PredictiveBackEvent? startBackEvent,
       PredictiveBackEvent? currentBackEvent,
+      _ShadowedPredictiveBackCommitCallback finishCommitBackGesture,
     );
 
 enum _ShadowedPredictiveBackPhase { idle, start, update, commit, cancel }
+
+typedef _ShadowedPredictiveBackCommitCallback =
+    void Function({required bool completeRouteAnimation});
 
 class _ShadowedPredictiveBackGestureDetector extends StatefulWidget {
   const _ShadowedPredictiveBackGestureDetector({
@@ -144,9 +167,18 @@ class _ShadowedPredictiveBackGestureDetector extends StatefulWidget {
 class _ShadowedPredictiveBackGestureDetectorState
     extends State<_ShadowedPredictiveBackGestureDetector>
     with WidgetsBindingObserver {
+  static const Duration _commitFallbackDelay = Duration(
+    milliseconds:
+        _ShadowedPredictiveBackSharedElementPageTransitionState
+            ._sharedElementCommitMilliseconds +
+        220,
+  );
+
   _ShadowedPredictiveBackPhase _phase = _ShadowedPredictiveBackPhase.idle;
   PredictiveBackEvent? _startBackEvent;
   PredictiveBackEvent? _currentBackEvent;
+  bool _commitBackGestureFinished = true;
+  Timer? _commitFallbackTimer;
 
   bool get _isEnabled =>
       widget.route.isCurrent && widget.route.popGestureEnabled;
@@ -159,6 +191,7 @@ class _ShadowedPredictiveBackGestureDetectorState
 
   @override
   void dispose() {
+    _commitFallbackTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -191,6 +224,8 @@ class _ShadowedPredictiveBackGestureDetectorState
 
   @override
   void handleCancelBackGesture() {
+    _commitFallbackTimer?.cancel();
+    _commitBackGestureFinished = true;
     _syncGesture(
       phase: _ShadowedPredictiveBackPhase.cancel,
       startBackEvent: null,
@@ -201,11 +236,28 @@ class _ShadowedPredictiveBackGestureDetectorState
 
   @override
   void handleCommitBackGesture() {
+    _commitFallbackTimer?.cancel();
+    _commitBackGestureFinished = false;
     _syncGesture(
       phase: _ShadowedPredictiveBackPhase.commit,
       startBackEvent: null,
       currentBackEvent: null,
     );
+    _commitFallbackTimer = Timer(_commitFallbackDelay, () {
+      _finishCommitBackGesture(completeRouteAnimation: false);
+    });
+  }
+
+  void _finishCommitBackGesture({required bool completeRouteAnimation}) {
+    if (_commitBackGestureFinished) return;
+
+    _commitBackGestureFinished = true;
+    _commitFallbackTimer?.cancel();
+    _commitFallbackTimer = null;
+
+    if (completeRouteAnimation && widget.route.isCurrent) {
+      widget.route.handleUpdateBackGestureProgress(progress: 0);
+    }
     widget.route.handleCommitBackGesture();
   }
 
@@ -228,7 +280,10 @@ class _ShadowedPredictiveBackGestureDetectorState
 
   @override
   Widget build(BuildContext context) {
-    final effectivePhase = widget.route.popGestureInProgress
+    final keepGesturePhase =
+        widget.route.popGestureInProgress ||
+        _phase == _ShadowedPredictiveBackPhase.commit;
+    final effectivePhase = keepGesturePhase
         ? _phase
         : _ShadowedPredictiveBackPhase.idle;
     return widget.builder(
@@ -236,6 +291,7 @@ class _ShadowedPredictiveBackGestureDetectorState
       effectivePhase,
       _startBackEvent,
       _currentBackEvent,
+      _finishCommitBackGesture,
     );
   }
 
@@ -250,6 +306,8 @@ class _ShadowedPredictiveBackSharedElementPageTransition
     required this.phase,
     required this.startBackEvent,
     required this.currentBackEvent,
+    required this.onCommitBackGestureFinished,
+    required this.route,
     required this.child,
   });
 
@@ -258,6 +316,8 @@ class _ShadowedPredictiveBackSharedElementPageTransition
   final _ShadowedPredictiveBackPhase phase;
   final PredictiveBackEvent? startBackEvent;
   final PredictiveBackEvent? currentBackEvent;
+  final _ShadowedPredictiveBackCommitCallback onCommitBackGestureFinished;
+  final PageRoute<dynamic> route;
   final Widget child;
 
   @override
@@ -266,22 +326,34 @@ class _ShadowedPredictiveBackSharedElementPageTransition
 }
 
 class _ShadowedPredictiveBackSharedElementPageTransitionState
-    extends State<_ShadowedPredictiveBackSharedElementPageTransition> {
+    extends State<_ShadowedPredictiveBackSharedElementPageTransition>
+    with SingleTickerProviderStateMixin {
   static const double _minScale = 0.90;
   static const double _divisionFactor = 20;
   static const double _margin = 8;
   static const double _yPositionFactor = 0.1;
-  static const int _commitMilliseconds = 400;
+  static const int _routeCommitMilliseconds = 400;
+  static const int _sharedElementCommitMilliseconds = 820;
+
+  /// Commit the pop as soon as the collapse is *visually* finished rather than
+  /// waiting for the controller to reach 1.0.
+  ///
+  /// The rect lerp runs `easeOutCubic` on top of the controller's
+  /// `easeInOutCubicEmphasized`, so the page/preview reach the target button by
+  /// `commitProgress ≈ 0.8` (~25% of the duration) and the shadow has settled
+  /// shortly after. The remaining duration is invisible: the page is parked on
+  /// the button but the route has not popped, so taps land on this transition
+  /// instead of the revealed list. Finishing here removes that dead tail.
+  static const double _commitRevealProgress = 0.82;
   static const curve = Curves.easeInOutCubicEmphasized;
   static const _commitInterval = Interval(
     0,
-    _commitMilliseconds /
+    _routeCommitMilliseconds /
         FadeForwardsPageTransitionsBuilder.kTransitionMilliseconds,
     curve: curve,
   );
   static const double _deviceBorderRadius = 32;
   static const double _sharedElementStart = 0.50;
-  static const double _sharedElementPageFadeEnd = 0.72;
   static const double _sharedElementContentFadeStart = 0.18;
   static const double _sharedElementContentFadeEnd = 0.44;
   static const double _fallbackCardRadius = 24;
@@ -292,22 +364,32 @@ class _ShadowedPredictiveBackSharedElementPageTransitionState
   final _commitAnimation = ProxyAnimation();
   final _bounceAnimation = ProxyAnimation();
   final _animation = ProxyAnimation();
+  late final AnimationController _sharedElementCommitController;
 
   CurvedAnimation? _curvedAnimation;
   CurvedAnimation? _curvedAnimationReversed;
   late Animation<Offset> _positionAnimation;
   double _lastBounceAnimationValue = 0;
   Offset _lastDrag = Offset.zero;
-  double _commitStartSharedElementProgress = 0;
-  Offset _commitStartSharedElementOffset = Offset.zero;
-  Offset _lastSharedElementOffset = Offset.zero;
+  double _commitStartBackProgress = 0;
+  Offset _commitStartPageOffset = Offset.zero;
   String? _cachedSharedElementId;
+  Rect? _cachedSharedElementTargetRect;
+  BorderRadius? _cachedSharedElementTargetBorderRadius;
+  Color? _cachedSharedElementTargetColor;
+  Color? _cachedSharedElementSourceColor;
   Widget? _cachedSharedElementPreview;
   bool _sharedElementPreviewResolved = false;
+  bool _sharedElementCommitStarted = false;
+  bool _commitBackGestureFinishScheduled = false;
 
   @override
   void initState() {
     super.initState();
+    _sharedElementCommitController = AnimationController(
+      duration: const Duration(milliseconds: _sharedElementCommitMilliseconds),
+      vsync: this,
+    )..addStatusListener(_handleSharedElementCommitStatus);
     _updateCurvedAnimations();
   }
 
@@ -315,6 +397,10 @@ class _ShadowedPredictiveBackSharedElementPageTransitionState
   void didChangeDependencies() {
     super.didChangeDependencies();
     _updateAnimations(MediaQuery.sizeOf(context));
+    if (widget.phase == _ShadowedPredictiveBackPhase.commit &&
+        !_sharedElementCommitStarted) {
+      _beginSharedElementCommit();
+    }
   }
 
   @override
@@ -328,18 +414,19 @@ class _ShadowedPredictiveBackSharedElementPageTransitionState
     }
     if (widget.phase != oldWidget.phase &&
         widget.phase == _ShadowedPredictiveBackPhase.commit) {
-      _commitStartSharedElementProgress = clampDouble(
-        _lastBounceAnimationValue,
-        0,
-        1,
-      );
-      _commitStartSharedElementOffset = _lastSharedElementOffset;
+      _beginSharedElementCommit();
       _updateAnimations(MediaQuery.sizeOf(context));
+    } else if (widget.phase != _ShadowedPredictiveBackPhase.commit &&
+        oldWidget.phase == _ShadowedPredictiveBackPhase.commit) {
+      _sharedElementCommitStarted = false;
+      _commitBackGestureFinishScheduled = false;
+      _sharedElementCommitController.reset();
     }
   }
 
   @override
   void dispose() {
+    _sharedElementCommitController.dispose();
     _curvedAnimation?.dispose();
     _curvedAnimationReversed?.dispose();
     super.dispose();
@@ -415,6 +502,35 @@ class _ShadowedPredictiveBackSharedElementPageTransitionState
     );
   }
 
+  void _beginSharedElementCommit() {
+    _sharedElementCommitStarted = true;
+    _commitBackGestureFinishScheduled = false;
+    _commitStartBackProgress = clampDouble(_lastBounceAnimationValue, 0, 1);
+    _commitStartPageOffset = _lastDrag;
+    _sharedElementCommitController.forward(from: 0);
+  }
+
+  void _handleSharedElementCommitStatus(AnimationStatus status) {
+    if (status == AnimationStatus.completed &&
+        widget.phase == _ShadowedPredictiveBackPhase.commit) {
+      _finishCommitBackGestureAfterFrame(completeRouteAnimation: true);
+    }
+  }
+
+  void _finishCommitBackGestureAfterFrame({
+    required bool completeRouteAnimation,
+  }) {
+    if (_commitBackGestureFinishScheduled) return;
+    _commitBackGestureFinishScheduled = true;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      widget.onCommitBackGestureFinished(
+        completeRouteAnimation: completeRouteAnimation,
+      );
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
@@ -425,7 +541,10 @@ class _ShadowedPredictiveBackSharedElementPageTransitionState
         );
 
         return AnimatedBuilder(
-          animation: widget.animation,
+          animation: Listenable.merge([
+            widget.animation,
+            _sharedElementCommitController,
+          ]),
           child: widget.child,
           builder: (context, child) {
             final rawBackProgress = clampDouble(_bounceAnimation.value, 0, 1);
@@ -433,34 +552,64 @@ class _ShadowedPredictiveBackSharedElementPageTransitionState
               _lastBounceAnimationValue = rawBackProgress;
             }
 
+            final isCommit =
+                widget.phase == _ShadowedPredictiveBackPhase.commit;
             final registry = PredictiveBackSharedElementRegistry.instance;
-            final targetRect = _localTargetRect(
+            final targetRect = _activeSharedElementTargetRect(
+              registry,
               context,
-              registry.activeTargetRect(),
+              screenSize,
+              keepCached: isCommit,
             );
-            final preview = _activeSharedElementPreview(registry, context);
-            final hasSharedElement =
+            final targetBorderRadius = _activeSharedElementTargetBorderRadius(
+              registry,
+              keepCached: isCommit,
+            );
+            final targetColor = _activeSharedElementTargetColor(
+              registry,
+              keepCached: isCommit,
+            );
+            final sourceColor = _activeSharedElementSourceColor(
+              registry,
+              keepCached: isCommit,
+            );
+            final preview = _activeSharedElementPreview(
+              registry,
+              context,
+              keepCached: isCommit,
+            );
+            final ownerRoute = registry.activeOwnerRoute;
+            final ownerMatches =
+                ownerRoute == null || identical(ownerRoute, widget.route);
+            final showSharedElement =
+                isCommit &&
+                ownerMatches &&
                 preview != null &&
                 targetRect != null &&
                 _isUsableSharedElementRect(targetRect, screenSize);
+            final commitProgress = showSharedElement
+                ? curve.transform(_sharedElementCommitController.value)
+                : 0.0;
+            if (isCommit && !showSharedElement) {
+              _finishCommitBackGestureAfterFrame(completeRouteAnimation: false);
+            } else if (isCommit && commitProgress >= _commitRevealProgress) {
+              // Collapse is visually done — pop now instead of idling on the
+              // button for the rest of the controller's run (see
+              // [_commitRevealProgress]).
+              _finishCommitBackGestureAfterFrame(completeRouteAnimation: true);
+            }
 
             final sharedElementProgress = _sharedElementProgress(
               rawBackProgress,
+              showSharedElement,
+              commitProgress,
             );
-            final pageBackProgress = hasSharedElement
-                ? clampDouble(sharedElementProgress, 0, _sharedElementStart)
+            final pageBackProgress = showSharedElement
+                ? _commitStartBackProgress
                 : rawBackProgress;
             final pageScale = _scaleTween.transform(pageBackProgress);
-            final pageOffset = _pageOffset(
-              screenSize,
-              pageBackProgress,
-              hasSharedElement,
-            );
-            final pageOpacity =
-                _opacityTween.evaluate(_commitAnimation) *
-                (hasSharedElement
-                    ? _sharedElementPageOpacity(sharedElementProgress)
-                    : 1);
+            final pageOffset = _pageOffset(screenSize, showSharedElement);
+            final pageOpacity = _opacityTween.evaluate(_commitAnimation);
             final pageBorderRadius = _pageBorderRadius(
               context,
               pageBackProgress,
@@ -470,8 +619,27 @@ class _ShadowedPredictiveBackSharedElementPageTransitionState
               pageScale,
               pageOffset,
             );
-            final pageShadowProgress = hasSharedElement
-                ? clampDouble(sharedElementProgress, 0, 1)
+            final sharedElementT = showSharedElement
+                ? Curves.easeOutCubic.transform(commitProgress)
+                : 0.0;
+            final targetBorderRadiusGeometry =
+                targetBorderRadius ??
+                BorderRadius.circular(_fallbackCardRadius);
+            final visiblePageRect = showSharedElement
+                ? Rect.lerp(pageRect, targetRect, sharedElementT)!
+                : pageRect;
+            final visiblePageBorderRadius = showSharedElement
+                ? BorderRadiusGeometry.lerp(
+                    pageBorderRadius,
+                    targetBorderRadiusGeometry,
+                    sharedElementT,
+                  )!
+                : pageBorderRadius;
+            final visiblePageOpacity = showSharedElement
+                ? _shrinkingPageOpacity(commitProgress)
+                : pageOpacity;
+            final pageShadowProgress = showSharedElement
+                ? _sharedElementOverlayShadowProgress(commitProgress)
                 : rawBackProgress;
 
             return SizedBox(
@@ -480,41 +648,31 @@ class _ShadowedPredictiveBackSharedElementPageTransitionState
               child: Stack(
                 clipBehavior: Clip.none,
                 children: [
-                  Positioned.fill(
-                    child: Transform.scale(
-                      scale: pageScale,
-                      child: Transform.translate(
-                        offset: pageOffset,
-                        child: Opacity(
-                          opacity: pageOpacity,
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              borderRadius: pageBorderRadius,
-                              boxShadow: _pageShadow(pageShadowProgress),
-                            ),
-                            child: ClipRRect(
-                              borderRadius: pageBorderRadius,
-                              child: child,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
+                  _TransformedPageSurface(
+                    screenSize: screenSize,
+                    rect: visiblePageRect,
+                    opacity: visiblePageOpacity,
+                    borderRadius: visiblePageBorderRadius,
+                    shadow: _pageShadow(pageShadowProgress),
+                    child: child!,
                   ),
-                  if (hasSharedElement)
+                  if (showSharedElement)
                     _SharedElementOverlay(
                       progress: sharedElementProgress,
                       sourceRect: pageRect,
                       targetRect: targetRect,
-                      sourceBorderRadius: _sharedElementSourceBorderRadius,
-                      targetBorderRadius:
-                          registry.activeTargetBorderRadius() ??
-                          BorderRadius.circular(_fallbackCardRadius),
-                      sourceColor: Theme.of(context).colorScheme.surface,
-                      targetColor: Theme.of(
-                        context,
-                      ).colorScheme.surfaceContainerHighest,
-                      shadow: _pageShadow(sharedElementProgress),
+                      sourceBorderRadius: _sharedElementSourceBorderRadius(
+                        pageBackProgress,
+                      ),
+                      targetBorderRadius: targetBorderRadiusGeometry,
+                      sourceColor:
+                          sourceColor ?? Theme.of(context).colorScheme.surface,
+                      targetColor:
+                          targetColor ??
+                          mailListSurfaceColor(Theme.of(context)),
+                      shadow: _pageShadow(
+                        _sharedElementOverlayShadowProgress(commitProgress),
+                      ),
                       contentFadeStart: _sharedElementContentFadeStart,
                       contentFadeEnd: _sharedElementContentFadeEnd,
                       child: preview,
@@ -539,29 +697,38 @@ class _ShadowedPredictiveBackSharedElementPageTransitionState
     return Size(math.max(1, width), math.max(1, height));
   }
 
-  BorderRadiusGeometry get _sharedElementSourceBorderRadius =>
-      BorderRadius.circular(_borderRadiusTween.transform(_sharedElementStart));
+  BorderRadiusGeometry _sharedElementSourceBorderRadius(double progress) {
+    return BorderRadius.circular(_borderRadiusTween.transform(progress));
+  }
 
-  double _sharedElementProgress(double rawBackProgress) {
-    if (widget.phase != _ShadowedPredictiveBackPhase.commit) {
+  double _sharedElementProgress(
+    double rawBackProgress,
+    bool showSharedElement,
+    double commitProgress,
+  ) {
+    if (!showSharedElement) {
       return rawBackProgress;
     }
 
-    return lerpDouble(
-      _commitStartSharedElementProgress,
-      1,
-      clampDouble(_animation.value, 0, 1),
-    )!;
+    return lerpDouble(_sharedElementStart, 1, commitProgress)!;
   }
 
-  double _sharedElementPageOpacity(double progress) {
-    final fadeProgress = clampDouble(
-      (progress - _sharedElementStart) /
-          (_sharedElementPageFadeEnd - _sharedElementStart),
-      0,
-      1,
+  double _shrinkingPageOpacity(double commitProgress) {
+    final progress = clampDouble((commitProgress - 0.30) / 0.42, 0, 1);
+    return 1 - Curves.easeInCubic.transform(progress);
+  }
+
+  double _sharedElementOverlayShadowProgress(double commitProgress) {
+    final progress = clampDouble(commitProgress, 0, 1);
+    final rise = Curves.easeOutCubic.transform(
+      clampDouble(progress / 0.28, 0, 1),
     );
-    return 1 - Curves.easeInCubic.transform(fadeProgress);
+    final fadeOut =
+        1 -
+        Curves.easeOutCubic.transform(
+          clampDouble((progress - 0.56) / 0.36, 0, 1),
+        );
+    return lerpDouble(_commitStartBackProgress, 1, rise)! * fadeOut;
   }
 
   BorderRadiusGeometry _pageBorderRadius(
@@ -572,41 +739,18 @@ class _ShadowedPredictiveBackSharedElementPageTransitionState
         BorderRadius.circular(_borderRadiusTween.transform(pageBackProgress));
   }
 
-  Offset _pageOffset(
-    Size screenSize,
-    double pageBackProgress,
-    bool hasSharedElement,
-  ) {
-    if (!hasSharedElement) {
-      return switch (widget.phase) {
-        _ShadowedPredictiveBackPhase.commit => _positionAnimation.value,
-        _ => _lastDrag = Offset(
-          _positionAnimation.value.dx,
-          _getYShiftPosition(screenSize.height),
-        ),
-      };
+  Offset _pageOffset(Size screenSize, bool showSharedElement) {
+    if (showSharedElement) {
+      return _commitStartPageOffset;
     }
 
-    if (widget.phase == _ShadowedPredictiveBackPhase.commit) {
-      return _commitStartSharedElementOffset;
-    }
-
-    return _lastSharedElementOffset = _gestureOffsetForBackProgress(
-      screenSize,
-      pageBackProgress,
-    );
-  }
-
-  Offset _gestureOffsetForBackProgress(Size screenSize, double backProgress) {
-    final xShift = (screenSize.width / _divisionFactor) - _margin;
-    final direction = switch (widget.currentBackEvent?.swipeEdge) {
-      SwipeEdge.right => -1.0,
-      SwipeEdge.left || null => 1.0,
+    return switch (widget.phase) {
+      _ShadowedPredictiveBackPhase.commit => _positionAnimation.value,
+      _ => _lastDrag = Offset(
+        _positionAnimation.value.dx,
+        _getYShiftPosition(screenSize.height),
+      ),
     };
-    return Offset(
-      direction * xShift * backProgress,
-      _getYShiftPosition(screenSize.height),
-    );
   }
 
   Rect _pageRectForTransform(Size screenSize, double scale, Offset offset) {
@@ -654,20 +798,104 @@ class _ShadowedPredictiveBackSharedElementPageTransitionState
         rect.height <= screenSize.height;
   }
 
-  Widget? _activeSharedElementPreview(
+  Rect? _activeSharedElementTargetRect(
     PredictiveBackSharedElementRegistry registry,
     BuildContext context,
-  ) {
+    Size screenSize, {
+    required bool keepCached,
+  }) {
     final activeId = registry.activeId;
     if (activeId == null) {
-      _clearSharedElementPreviewCache();
-      return null;
+      return keepCached ? _cachedSharedElementTargetRect : null;
     }
 
     if (_cachedSharedElementId != activeId) {
+      _clearSharedElementPreviewCache();
       _cachedSharedElementId = activeId;
-      _cachedSharedElementPreview = null;
-      _sharedElementPreviewResolved = false;
+    }
+
+    final targetRect = _localTargetRect(context, registry.activeTargetRect());
+    if (targetRect != null &&
+        _isUsableSharedElementRect(targetRect, screenSize)) {
+      _cachedSharedElementTargetRect = targetRect;
+    }
+    _cachedSharedElementTargetBorderRadius = registry
+        .activeTargetBorderRadius();
+
+    return targetRect ?? (keepCached ? _cachedSharedElementTargetRect : null);
+  }
+
+  BorderRadius? _activeSharedElementTargetBorderRadius(
+    PredictiveBackSharedElementRegistry registry, {
+    required bool keepCached,
+  }) {
+    if (registry.activeId == null) {
+      return keepCached ? _cachedSharedElementTargetBorderRadius : null;
+    }
+
+    return _cachedSharedElementTargetBorderRadius;
+  }
+
+  Color? _activeSharedElementTargetColor(
+    PredictiveBackSharedElementRegistry registry, {
+    required bool keepCached,
+  }) {
+    final activeId = registry.activeId;
+    if (activeId == null) {
+      return keepCached ? _cachedSharedElementTargetColor : null;
+    }
+
+    if (_cachedSharedElementId != activeId) {
+      _clearSharedElementPreviewCache();
+      _cachedSharedElementId = activeId;
+    }
+
+    final color = registry.activeTargetBackgroundColor();
+    if (color != null) {
+      _cachedSharedElementTargetColor = color;
+    }
+
+    return color ?? (keepCached ? _cachedSharedElementTargetColor : null);
+  }
+
+  Color? _activeSharedElementSourceColor(
+    PredictiveBackSharedElementRegistry registry, {
+    required bool keepCached,
+  }) {
+    final activeId = registry.activeId;
+    if (activeId == null) {
+      return keepCached ? _cachedSharedElementSourceColor : null;
+    }
+
+    if (_cachedSharedElementId != activeId) {
+      _clearSharedElementPreviewCache();
+      _cachedSharedElementId = activeId;
+    }
+
+    final color = registry.activeSourceBackgroundColor();
+    if (color != null) {
+      _cachedSharedElementSourceColor = color;
+    }
+
+    return color ?? (keepCached ? _cachedSharedElementSourceColor : null);
+  }
+
+  Widget? _activeSharedElementPreview(
+    PredictiveBackSharedElementRegistry registry,
+    BuildContext context, {
+    required bool keepCached,
+  }) {
+    final activeId = registry.activeId;
+    if (activeId == null) {
+      if (!keepCached) {
+        _clearSharedElementPreviewCache();
+      }
+      return keepCached ? _cachedSharedElementPreview : null;
+    }
+
+    if (_cachedSharedElementId != activeId) {
+      _clearSharedElementPreviewCache();
+      _cachedSharedElementId = activeId;
     }
 
     if (!_sharedElementPreviewResolved) {
@@ -680,6 +908,10 @@ class _ShadowedPredictiveBackSharedElementPageTransitionState
 
   void _clearSharedElementPreviewCache() {
     _cachedSharedElementId = null;
+    _cachedSharedElementTargetRect = null;
+    _cachedSharedElementTargetBorderRadius = null;
+    _cachedSharedElementTargetColor = null;
+    _cachedSharedElementSourceColor = null;
     _cachedSharedElementPreview = null;
     _sharedElementPreviewResolved = false;
   }
@@ -751,7 +983,7 @@ class _SharedElementOverlay extends StatelessWidget {
       easedT,
     )!;
     final surfaceOpacity = Curves.easeOut.transform(
-      clampDouble(rawT / 0.20, 0, 1),
+      clampDouble((rawT - 0.18) / 0.42, 0, 1),
     );
     final contentOpacity = Curves.easeOut.transform(
       clampDouble(
@@ -801,13 +1033,59 @@ class _SharedElementOverlay extends StatelessWidget {
   }
 }
 
+class _TransformedPageSurface extends StatelessWidget {
+  const _TransformedPageSurface({
+    required this.screenSize,
+    required this.rect,
+    required this.opacity,
+    required this.borderRadius,
+    required this.shadow,
+    required this.child,
+  });
+
+  final Size screenSize;
+  final Rect rect;
+  final double opacity;
+  final BorderRadiusGeometry borderRadius;
+  final List<BoxShadow> shadow;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final scaleX = rect.width / screenSize.width;
+    final scaleY = rect.height / screenSize.height;
+    final transform = Matrix4.identity()
+      ..translateByDouble(rect.left, rect.top, 0, 1)
+      ..scaleByDouble(scaleX, scaleY, 1, 1);
+
+    return Positioned.fill(
+      child: Transform(
+        alignment: Alignment.topLeft,
+        transform: transform,
+        child: Opacity(
+          opacity: opacity,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              borderRadius: borderRadius,
+              boxShadow: shadow,
+            ),
+            child: ClipRRect(borderRadius: borderRadius, child: child),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _PredictiveBackGestureSnapshot extends StatefulWidget {
   const _PredictiveBackGestureSnapshot({
     required this.route,
+    required this.active,
     required this.child,
   });
 
   final PageRoute<dynamic> route;
+  final bool active;
   final Widget child;
 
   @override
@@ -831,6 +1109,8 @@ class _PredictiveBackGestureSnapshotState
     super.didUpdateWidget(oldWidget);
     if (oldWidget.route != widget.route) {
       _bindNavigator();
+    } else if (oldWidget.active != widget.active) {
+      _syncSnapshotting();
     }
   }
 
@@ -849,7 +1129,8 @@ class _PredictiveBackGestureSnapshotState
 
   void _syncSnapshotting() {
     _controller.allowSnapshotting =
-        _navigator?.userGestureInProgressNotifier.value ?? false;
+        widget.active ||
+        (_navigator?.userGestureInProgressNotifier.value ?? false);
   }
 
   @override
