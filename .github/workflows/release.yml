@@ -1,0 +1,141 @@
+name: release
+
+# 触发方式：
+#   1) 推送 v* 标签自动发布：
+#        测试版 → tag 含连字符（v1.1.0-beta.1 / v1.1.0-rc.1 …）→ 标记为 prerelease
+#        正式版 → 纯版本号 tag（v1.1.0）→ 标记为 Latest release
+#   2) Actions 页手动触发（workflow_dispatch）：填入 tag 与可选 notes
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '版本标签，如 v1.1.0 或 v1.1.0-beta.1（含连字符=预发布）'
+        required: true
+      notes:
+        description: '发布说明（可选，置顶于自动生成的 changelog 之前）'
+        required: false
+        default: ''
+
+# 创建 Release 用内置 GITHUB_TOKEN，无需额外 secret。
+permissions:
+  contents: write
+
+jobs:
+  android:
+    name: Build & release Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Flutter 3.44.1
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.44.1
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # 用 secrets 还原 keystore 并写出 android/key.properties，
+      # 触发 build.gradle.kts 的 release 签名分支（密钥值由 GitHub 自动打码，不进日志）。
+      - name: Decode keystore & write key.properties
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KEYSTORE_BASE64:-}" ]; then
+            echo "::error::缺少 ANDROID_KEYSTORE_BASE64 secret，无法进行正式签名"
+            exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > android/app/everyemail-release.jks
+          cat > android/key.properties <<EOF
+          storeFile=everyemail-release.jks
+          storePassword=${KEYSTORE_PASSWORD}
+          keyAlias=${KEY_ALIAS}
+          keyPassword=${KEY_PASSWORD}
+          EOF
+
+      # 解析标签 → build-name / 是否预发布；versionCode 用 run_number 保证单调递增。
+      - name: Resolve version & channel
+        id: meta
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::tag 为空"; exit 1
+          fi
+          NAME="${TAG#v}"                       # 去掉前导 v 作为 versionName
+          case "$TAG" in
+            *-*) PRERELEASE=true ;;             # 含连字符 = SemVer 预发布段
+            *)   PRERELEASE=false ;;
+          esac
+          {
+            echo "tag=$TAG"
+            echo "name=$NAME"
+            echo "prerelease=$PRERELEASE"
+          } >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG  build-name=$NAME  prerelease=$PRERELEASE  versionCode=${{ github.run_number }}"
+
+      # OAuth client id 经 --dart-define 编译期注入（与 AppConfig 的 String.fromEnvironment 对应）。
+      # client id 是公开值（非机密），故用 Actions Variables（vars）而非 Secrets。
+      # 为空时对应登录被禁用、构建仍成功。Android 的 Google 登录凭包名+SHA-1 匹配，
+      # 无需 iOS client id（GOOGLE_IOS_CLIENT_ID 留给日后的 iOS job）。
+      - name: Build release APK
+        run: |
+          flutter build apk --release \
+            --build-name="${{ steps.meta.outputs.name }}" \
+            --build-number="${{ github.run_number }}" \
+            --dart-define=GOOGLE_SERVER_CLIENT_ID="${{ vars.GOOGLE_SERVER_CLIENT_ID }}" \
+            --dart-define=MS_OAUTH_CLIENT_ID="${{ vars.MS_OAUTH_CLIENT_ID }}"
+
+      # 信息性自检：打印签名证书，确认是 release 证书而非 Android debug 证书。
+      - name: Verify signing (sanity)
+        continue-on-error: true
+        run: |
+          BT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}/build-tools"
+          APKSIGNER="$(find "$BT" -name apksigner 2>/dev/null | sort -V | tail -1)"
+          if [ -n "$APKSIGNER" ]; then
+            "$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk | head -20
+          else
+            echo "未找到 apksigner，跳过证书打印（不影响发布）。"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.meta.outputs.tag }}
+          tag_name: ${{ steps.meta.outputs.tag }}
+          prerelease: ${{ steps.meta.outputs.prerelease }}
+          body: ${{ github.event.inputs.notes }}
+          generate_release_notes: true
+          files: build/app/outputs/flutter-apk/app-release.apk
+          fail_on_unmatched_files: true
+
+# -----------------------------------------------------------------------------
+# iOS 扩展点（暂不启用，需付费 Apple 账号）。日后发 iOS 时在此新增 job：
+#   ios:
+#     runs-on: macos-latest
+#     前置：Apple 开发者账号、ios/Runner/GoogleService-Info.plist、
+#           签名证书(BUILD_CERTIFICATE_BASE64 + P12_PASSWORD)、
+#           ad-hoc/distribution 描述文件、App Store Connect API Key。
+#     步骤：导入证书与描述文件 → flutter build ipa --release →
+#           将 .ipa 作为额外资产附加到上面的同一个 Release。
+# -----------------------------------------------------------------------------

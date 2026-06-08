@@ -46,3 +46,13 @@ app.*.map.json
 
 # FUCKING DOCS WRITTEN BY STUPID AI
 /docs/
+
+# Release signing —— 切勿提交 keystore 与签名凭据
+android/key.properties
+*.jks
+*.keystore
+*.p12
+
+# 构建产物与工具临时文件
+/android/build/
+invocation-*.json
