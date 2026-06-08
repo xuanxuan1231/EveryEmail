@@ -4,9 +4,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/providers.dart';
+import '../../core/config/app_config.dart';
 import '../../core/utils/id_generator.dart';
-import '../../data/auth/oauth_config.dart';
+import '../../data/auth/google_auth_service.dart';
 import '../../data/auth/oauth_identity.dart';
+import '../../data/autoconfig/discovery_service.dart';
 import '../../data/local/database/app_database.dart';
 import '../../domain/enums/account_enums.dart';
 
@@ -53,18 +55,18 @@ class _OAuthPageState extends ConsumerState<OAuthPage> {
       debugPrint('账户类型: ${widget.accountType}');
       debugPrint('邮箱: ${widget.email}');
 
-      final config = OAuthProviders.forType(widget.accountType);
-      if (config == null) {
+      final configured = switch (widget.accountType) {
+        AccountType.gmailOAuth => AppConfig.isGoogleConfigured,
+        AccountType.microsoftGraph => AppConfig.isMicrosoftConfigured,
+        AccountType.genericImap => false,
+      };
+      if (!configured) {
         throw Exception(
-          'OAuth 配置未找到。\n'
-          '请检查是否传入了 --dart-define=MS_OAUTH_CLIENT_ID\n'
-          '客户端 ID 格式应为 GUID（如 12345678-1234-1234-1234-123456789abc）',
+          'OAuth 配置未找到。请通过 --dart-define 传入对应的客户端 ID：\n'
+          'Gmail → GOOGLE_SERVER_CLIENT_ID（Google 的 Web 客户端 ID）\n'
+          'Microsoft → MS_OAUTH_CLIENT_ID（GUID）',
         );
       }
-
-      debugPrint('客户端 ID: ${config.clientId.substring(0, 8)}...');
-      debugPrint('重定向 URI: ${config.redirectUrl}');
-      debugPrint('权限范围数量: ${config.scopes.length}');
 
       final oauthService = ref.read(oauthServiceProvider);
       final tokenStore = ref.read(tokenStoreProvider);
@@ -82,6 +84,17 @@ class _OAuthPageState extends ConsumerState<OAuthPage> {
         throw Exception('未获取到 refresh token，无法保存账户');
       }
 
+      // 解析账户邮箱：优先用用户已输入的地址；若为空（直接通过「通过 Google /
+      // Microsoft 继续」登录），则取 OAuth 身份信息里的邮箱。Gmail 的 IMAP/SMTP
+      // XOAUTH2 以邮箱作为登录名，缺失会导致登录失败，因此必须拿到非空地址。
+      final typedEmail = widget.email.trim();
+      final resolvedEmail = typedEmail.isNotEmpty
+          ? typedEmail
+          : (tokens.identity?.primaryEmail ?? '');
+      if (resolvedEmail.isEmpty) {
+        throw Exception('未能从账户中获取邮箱地址，请重试');
+      }
+
       // 2. 生成账户 ID 和密钥引用
       final accountId = generateId();
       final secretRef = 'account_$accountId';
@@ -90,19 +103,29 @@ class _OAuthPageState extends ConsumerState<OAuthPage> {
       await tokenStore.writeRefreshToken(secretRef, tokens.refreshToken!);
 
       // 4. 保存账户配置到数据库
-      final displayName = widget.accountType == AccountType.gmailOAuth
-          ? 'Gmail'
-          : 'Microsoft';
+      final isGmail = widget.accountType == AccountType.gmailOAuth;
+      final displayName = isGmail ? 'Gmail' : 'Microsoft';
+      // Gmail 走 IMAP/SMTP XOAUTH2，必须写入服务器配置，否则首次同步报「IMAP 配置缺失」。
+      // Microsoft 走 Graph，无需 IMAP/SMTP。
+      final imapConfig = isGmail ? DiscoveryService.gmailImap : null;
+      final smtpConfig = isGmail ? DiscoveryService.gmailSmtp : null;
 
       await db.accountDao.insertAccount(
         AccountsCompanion.insert(
           id: accountId,
-          email: widget.email,
+          email: resolvedEmail,
           displayName: displayName,
           accountType: widget.accountType,
           authType: AuthType.oauth,
           secretRef: Value(secretRef),
           colorValue: Value(_generateAccountColor()),
+          imapHost: Value(imapConfig?.host),
+          imapPort: Value(imapConfig?.port),
+          imapSocketType: Value(imapConfig?.socketType),
+          smtpHost: Value(smtpConfig?.host),
+          smtpPort: Value(smtpConfig?.port),
+          smtpSocketType: Value(smtpConfig?.socketType),
+          loginName: Value(isGmail ? resolvedEmail : null),
         ),
       );
 
@@ -111,7 +134,7 @@ class _OAuthPageState extends ConsumerState<OAuthPage> {
       // 5. 导航到同步配置页面
       if (mounted) {
         context.push(
-          '/onboarding/sync-config?email=${Uri.encodeComponent(widget.email)}&accountId=${Uri.encodeComponent(accountId)}',
+          '/onboarding/sync-config?email=${Uri.encodeComponent(resolvedEmail)}&accountId=${Uri.encodeComponent(accountId)}',
         );
       }
     } catch (e, stackTrace) {
@@ -128,8 +151,21 @@ class _OAuthPageState extends ConsumerState<OAuthPage> {
   }
 
   String _formatErrorMessage(Object error) {
+    if (error is GoogleSignInCancelled) {
+      return '已取消登录。请点击重试，并在弹出的 Google 账户选择器中选择账户并完成授权。';
+    }
     if (error is OAuthAccountMismatchException) {
       return '${error.message}\n\n请点击重试，并在 Microsoft 登录页选择 ${error.expectedEmail}。';
+    }
+
+    if (widget.accountType == AccountType.gmailOAuth) {
+      return '登录失败：$error\n\n'
+          '请检查：\n'
+          '1. 是否已传入 --dart-define=GOOGLE_SERVER_CLIENT_ID（Web 客户端 ID）\n'
+          '2. 该 Google 账户是否在 OAuth 同意屏幕的「测试用户」名单中\n'
+          '3. 设备已安装并登录 Google Play 服务\n'
+          '4. 网络连接是否正常\n\n'
+          '查看控制台日志获取详细信息';
     }
 
     return '登录失败：$error\n\n'

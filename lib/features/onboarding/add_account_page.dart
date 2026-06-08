@@ -1,8 +1,12 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/providers.dart';
+import '../../core/config/app_config.dart';
+import '../../core/navigation/predictive_back_shared_element.dart';
 import '../../domain/enums/account_enums.dart';
 
 /// 添加账户页面（账户向导入口）。
@@ -12,7 +16,11 @@ import '../../domain/enums/account_enums.dart';
 /// 2. 自动发现服务器配置
 /// 3. 根据账户类型路由到 OAuth 或密码页面
 class AddAccountPage extends ConsumerStatefulWidget {
-  const AddAccountPage({super.key});
+  const AddAccountPage({this.returnId, super.key});
+
+  /// 共享元素返回目标 id。从设置的「添加账户」按钮进入时传入，返回时页面收束回
+  /// 该按钮；首次使用流程不传，使用默认转场。
+  final String? returnId;
 
   @override
   ConsumerState<AddAccountPage> createState() => _AddAccountPageState();
@@ -90,7 +98,10 @@ class _AddAccountPageState extends ConsumerState<AddAccountPage> {
                 },
               };
 
-              final uri = Uri(path: '/onboarding/password', queryParameters: queryParams);
+              final uri = Uri(
+                path: '/onboarding/password',
+                queryParameters: queryParams,
+              );
               context.push(uri.toString());
               return;
             }
@@ -124,24 +135,24 @@ class _AddAccountPageState extends ConsumerState<AddAccountPage> {
     context.push('/onboarding/manual?email=${Uri.encodeComponent(email)}');
   }
 
+  /// 直接进入 OAuth 流程（无需先输入邮箱）。邮箱将在授权后从账户身份信息中获取。
+  void _continueWithOAuth(AccountType type) {
+    context.push('/onboarding/oauth?type=${type.name}');
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('添加账户'),
-      ),
+    final scaffold = Scaffold(
+      appBar: AppBar(title: const Text('添加账户')),
       body: Form(
         key: _formKey,
         child: ListView(
           padding: const EdgeInsets.all(24.0),
           children: [
             // 标题
-            Text(
-              '输入邮箱地址',
-              style: theme.textTheme.headlineMedium,
-            ),
+            Text('输入邮箱地址', style: theme.textTheme.headlineMedium),
             const SizedBox(height: 8),
             Text(
               '我们会自动配置服务器设置',
@@ -187,10 +198,7 @@ class _AddAccountPageState extends ConsumerState<AddAccountPage> {
                 ),
                 child: Row(
                   children: [
-                    Icon(
-                      Icons.error_outline,
-                      color: theme.colorScheme.error,
-                    ),
+                    Icon(Icons.error_outline, color: theme.colorScheme.error),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(
@@ -227,6 +235,46 @@ class _AddAccountPageState extends ConsumerState<AddAccountPage> {
               child: const Text('手动设置'),
             ),
 
+            // 第三方快捷登录（仅在对应 OAuth 已配置时显示）
+            if (AppConfig.isGoogleConfigured ||
+                AppConfig.isMicrosoftConfigured) ...[
+              const SizedBox(height: 24),
+              Row(
+                children: [
+                  const Expanded(child: Divider()),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Text(
+                      '或',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                  const Expanded(child: Divider()),
+                ],
+              ),
+              const SizedBox(height: 16),
+              if (AppConfig.isGoogleConfigured) ...[
+                OutlinedButton.icon(
+                  onPressed: _isDiscovering
+                      ? null
+                      : () => _continueWithOAuth(AccountType.gmailOAuth),
+                  icon: const _GoogleLogo(),
+                  label: const Text('通过 Google 继续'),
+                ),
+                const SizedBox(height: 12),
+              ],
+              if (AppConfig.isMicrosoftConfigured)
+                OutlinedButton.icon(
+                  onPressed: _isDiscovering
+                      ? null
+                      : () => _continueWithOAuth(AccountType.microsoftGraph),
+                  icon: const _MicrosoftLogo(),
+                  label: const Text('通过 Microsoft 继续'),
+                ),
+            ],
+
             const SizedBox(height: 24),
 
             // 支持的服务商
@@ -252,6 +300,10 @@ class _AddAccountPageState extends ConsumerState<AddAccountPage> {
         ),
       ),
     );
+
+    final returnId = widget.returnId;
+    if (returnId == null) return scaffold;
+    return PredictiveBackReturnTarget(id: returnId, child: scaffold);
   }
 
   Widget _buildProviderChip(BuildContext context, String label) {
@@ -261,4 +313,104 @@ class _AddAccountPageState extends ConsumerState<AddAccountPage> {
       visualDensity: VisualDensity.compact,
     );
   }
+}
+
+/// Google 四色「G」标志（无需打包图片资源，用 CustomPaint 绘制）。
+class _GoogleLogo extends StatelessWidget {
+  const _GoogleLogo();
+
+  @override
+  Widget build(BuildContext context) {
+    return const SizedBox(
+      width: 18,
+      height: 18,
+      child: CustomPaint(painter: _GoogleLogoPainter()),
+    );
+  }
+}
+
+class _GoogleLogoPainter extends CustomPainter {
+  const _GoogleLogoPainter();
+
+  static const _blue = Color(0xFF4285F4);
+  static const _green = Color(0xFF34A853);
+  static const _yellow = Color(0xFFFBBC05);
+  static const _red = Color(0xFFEA4335);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final stroke = size.width * 0.24;
+    final rect = Rect.fromLTWH(
+      stroke / 2,
+      stroke / 2,
+      size.width - stroke,
+      size.height - stroke,
+    );
+    final arc = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = stroke;
+
+    double rad(double deg) => deg * math.pi / 180.0;
+
+    // 四段色弧（0° 指向右侧，顺时针为正）：蓝-右、绿-下、黄-左、红-上。
+    canvas.drawArc(rect, rad(-20), rad(70), false, arc..color = _blue);
+    canvas.drawArc(rect, rad(50), rad(85), false, arc..color = _green);
+    canvas.drawArc(rect, rad(135), rad(75), false, arc..color = _yellow);
+    canvas.drawArc(rect, rad(210), rad(75), false, arc..color = _red);
+
+    // 蓝色横杠：自圆心向右延伸到圆环中线，与右侧蓝弧相连构成「G」。
+    final cy = size.height / 2;
+    canvas.drawRect(
+      Rect.fromLTWH(
+        size.width * 0.5,
+        cy - stroke / 2,
+        size.width * 0.5 - stroke / 2,
+        stroke,
+      ),
+      Paint()..color = _blue,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+/// Microsoft 四方格标志。
+class _MicrosoftLogo extends StatelessWidget {
+  const _MicrosoftLogo();
+
+  @override
+  Widget build(BuildContext context) {
+    return const SizedBox(
+      width: 18,
+      height: 18,
+      child: CustomPaint(painter: _MicrosoftLogoPainter()),
+    );
+  }
+}
+
+class _MicrosoftLogoPainter extends CustomPainter {
+  const _MicrosoftLogoPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final gap = size.width * 0.08;
+    final cell = (size.width - gap) / 2;
+    final paint = Paint();
+
+    void square(double left, double top, Color color) {
+      canvas.drawRect(
+        Rect.fromLTWH(left, top, cell, cell),
+        paint..color = color,
+      );
+    }
+
+    square(0, 0, const Color(0xFFF25022)); // 左上 红
+    square(cell + gap, 0, const Color(0xFF7FBA00)); // 右上 绿
+    square(0, cell + gap, const Color(0xFF00A4EF)); // 左下 蓝
+    square(cell + gap, cell + gap, const Color(0xFFFFB900)); // 右下 黄
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

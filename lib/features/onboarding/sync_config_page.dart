@@ -314,6 +314,19 @@ class _SyncConfigPageState extends ConsumerState<SyncConfigPage> {
         } catch (e) {
           debugPrint('启用 webhook 订阅失败（不阻塞）: $e');
         }
+      } else if (account.type == AccountType.gmailOAuth) {
+        // Gmail：建立 Gmail watch + 注册 FCM token。同样不阻塞，
+        // 下次启动 FcmBootstrap 也会兜底重建 watch 和注册 token。
+        try {
+          final gmailManager = ref.read(gmailWatchManagerProvider);
+          await gmailManager.enableWatch(account);
+          final fcmToken = ref.read(fcmTokenProvider);
+          if (fcmToken != null) {
+            await gmailManager.registerFCMToken(account.id, fcmToken);
+          }
+        } catch (e) {
+          debugPrint('启用 Gmail watch 失败（不阻塞）: $e');
+        }
       }
 
       // 5. 同步完成，导航到主页面
