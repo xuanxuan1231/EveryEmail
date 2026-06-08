@@ -65,6 +65,31 @@ export default {
         return await handleUnregisterFCM(request, env);
       }
 
+      // 6c. Google：把原生 GIS 返回的 server auth code 兑换成 access/refresh token。
+      if (path === '/api/google/exchange' && request.method === 'POST') {
+        return await handleGoogleExchange(request, env);
+      }
+
+      // 6d. Google：用 refresh token 刷新 access token（仅 Worker 持有 Web client secret）。
+      if (path === '/api/google/refresh' && request.method === 'POST') {
+        return await handleGoogleRefresh(request, env);
+      }
+
+      // 6e. Gmail：建立 users.watch（绑定 Pub/Sub topic）并落库 watch 元数据 + 加密 refresh token。
+      if (path === '/api/gmail/watch' && request.method === 'POST') {
+        return await handleGmailWatch(request, env);
+      }
+
+      // 6f. Gmail：停止 watch（users.stop）并清理 KV。
+      if (path === '/api/gmail/stop' && request.method === 'POST') {
+        return await handleGmailStop(request, env);
+      }
+
+      // 6g. Gmail：Pub/Sub push 投递目标。解析 historyId → 拉新邮件内容 → 发 FCM。
+      if (path === '/gmail/push' && request.method === 'POST') {
+        return await handleGmailPush(request, env);
+      }
+
       // 7. 健康检查
       if (path === '/health') {
         return jsonResponse({ status: 'ok', timestamp: Date.now() });
@@ -75,6 +100,12 @@ export default {
       console.error('Error:', error);
       return jsonResponse({ error: error.message }, 500);
     }
+  },
+
+  // Cron Trigger（见 wrangler.toml [triggers]）：周期续订所有 Gmail watch。
+  // Gmail users.watch 最长 7 天过期，这里每次 cron 重新 watch 重置有效期。
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(renewAllGmailWatches(env));
   },
 };
 
@@ -116,7 +147,8 @@ async function handleWebhook(request, env) {
     }
 
     if (changeType === 'created') {
-      // 新邮件到达 → 通知消息（系统托盘可见）。
+      // 新邮件到达 → data 消息。客户端收到后用本地通知展示，
+      // 这样才能按用户设置动态附加通知操作按钮。
       // 去重：Graph 是 at-least-once 投递，同一封邮件可能被重投多次。
       const messageId = resourceData?.id;
       if (messageId) {
@@ -401,10 +433,579 @@ async function handleUnregisterFCM(request, env) {
   return jsonResponse({ success: true });
 }
 
+// Google OAuth：把原生应用（Android Credential Manager / iOS GoogleSignIn）取到的
+// 一次性 server auth code 兑换成 access/refresh token。
+// 用「Web 应用」OAuth 客户端 + secret 兑换——secret 只存在 Worker，不下发到设备。
+async function handleGoogleExchange(request, env) {
+  const { serverAuthCode } = await request.json().catch(() => ({}));
+  if (!serverAuthCode) {
+    return jsonResponse({ error: 'Missing serverAuthCode' }, 400);
+  }
+  if (!env.GOOGLE_WEB_CLIENT_ID || !env.GOOGLE_WEB_CLIENT_SECRET) {
+    return jsonResponse(
+      { error: 'Worker 未配置 GOOGLE_WEB_CLIENT_ID / GOOGLE_WEB_CLIENT_SECRET' },
+      500
+    );
+  }
+
+  const data = await googleTokenRequest({
+    code: serverAuthCode,
+    client_id: env.GOOGLE_WEB_CLIENT_ID,
+    client_secret: env.GOOGLE_WEB_CLIENT_SECRET,
+    grant_type: 'authorization_code',
+    // 原生 server auth code 兑换：redirect_uri 传空串（GIS 约定，无浏览器重定向）。
+    redirect_uri: '',
+  });
+
+  if (!data.ok) {
+    console.error('Google code exchange failed:', JSON.stringify(data.body));
+    return jsonResponse(
+      { error: 'Google code exchange failed', details: googleError(data.body) },
+      data.status
+    );
+  }
+
+  // data.body: { access_token, expires_in, refresh_token, scope, token_type, id_token }
+  return jsonResponse({
+    access_token: data.body.access_token,
+    refresh_token: data.body.refresh_token,
+    expires_in: data.body.expires_in,
+    scope: data.body.scope,
+    id_token: data.body.id_token,
+  });
+}
+
+// Google OAuth：用 refresh token 换新的 access token（Google 不回传新的 refresh token）。
+async function handleGoogleRefresh(request, env) {
+  const { refreshToken } = await request.json().catch(() => ({}));
+  if (!refreshToken) {
+    return jsonResponse({ error: 'Missing refreshToken' }, 400);
+  }
+  if (!env.GOOGLE_WEB_CLIENT_ID || !env.GOOGLE_WEB_CLIENT_SECRET) {
+    return jsonResponse(
+      { error: 'Worker 未配置 GOOGLE_WEB_CLIENT_ID / GOOGLE_WEB_CLIENT_SECRET' },
+      500
+    );
+  }
+
+  const data = await googleTokenRequest({
+    refresh_token: refreshToken,
+    client_id: env.GOOGLE_WEB_CLIENT_ID,
+    client_secret: env.GOOGLE_WEB_CLIENT_SECRET,
+    grant_type: 'refresh_token',
+  });
+
+  if (!data.ok) {
+    console.error('Google token refresh failed:', JSON.stringify(data.body));
+    return jsonResponse(
+      { error: 'Google token refresh failed', details: googleError(data.body) },
+      data.status
+    );
+  }
+
+  // data.body: { access_token, expires_in, scope, token_type, id_token? }
+  return jsonResponse({
+    access_token: data.body.access_token,
+    expires_in: data.body.expires_in,
+    scope: data.body.scope,
+    id_token: data.body.id_token,
+  });
+}
+
+// 调用 Google token 端点，返回 { ok, status, body }。
+async function googleTokenRequest(params) {
+  const response = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams(params),
+  });
+  const body = await response.json().catch(() => ({}));
+  return { ok: response.ok, status: response.status, body };
+}
+
+function googleError(body) {
+  return body.error_description || body.error || 'unknown error';
+}
+
+// ============================================================================
+// Gmail 推送（users.watch + Cloud Pub/Sub）。与 Graph webhook 等价：Gmail 把
+// 变更发布到 Pub/Sub topic → Pub/Sub push 到 /gmail/push → 这里用账户 refresh
+// token 调 Gmail API 解析出新邮件主题/发件人 → 复用 sendFCMMessage 推到设备。
+//
+// KV 布局：
+//   gmail:watch:{accountId} = { accountId, userId, email, encRefreshToken,
+//                               lastHistoryId, expiration, updatedAt }
+//   gmail:email:{email}     = [accountId, ...]   // 同邮箱多设备 fan-out
+//   fcm:{userId}:{accountId} = <fcmToken>        // 复用 Graph 那套
+//   seen:{accountId}:{messageId}                  // 复用去重
+// ============================================================================
+
+const GMAIL_API_ROOT = 'https://gmail.googleapis.com/gmail/v1/users/me';
+
+// 建立 / 重建 users.watch，落库 watch 元数据 + 加密 refresh token + email 索引。
+async function handleGmailWatch(request, env) {
+  const { refreshToken, userId, accountId, email } = await request
+    .json()
+    .catch(() => ({}));
+  if (!refreshToken || !accountId || !email) {
+    return jsonResponse({ error: 'Missing required fields' }, 400);
+  }
+  if (!env.GMAIL_PUBSUB_TOPIC) {
+    return jsonResponse({ error: 'Worker 未配置 GMAIL_PUBSUB_TOPIC' }, 500);
+  }
+
+  const accessToken = await gmailAccessTokenFromRefresh(refreshToken, env);
+  if (!accessToken) {
+    return jsonResponse({ error: 'Gmail token 刷新失败' }, 401);
+  }
+
+  const watchResult = await callGmailWatch(accessToken, env);
+  if (!watchResult.ok) {
+    console.error('Gmail watch 失败:', JSON.stringify(watchResult.body));
+    return jsonResponse(
+      { error: 'Gmail watch failed', details: googleError(watchResult.body) },
+      watchResult.status
+    );
+  }
+
+  const historyId = watchResult.body.historyId;
+  const expiration = watchResult.body.expiration; // ms epoch（字符串）
+
+  const encRefreshToken = await encryptSecret(refreshToken, env);
+  const normalizedEmail = String(email).toLowerCase();
+
+  // 重新 watch 不应回退 lastHistoryId（避免漏掉两次同步间的邮件）；首次则用 watch 返回值。
+  const existing = await env.KV.get(`gmail:watch:${accountId}`, 'json');
+  const lastHistoryId = existing?.lastHistoryId || String(historyId);
+
+  await env.KV.put(
+    `gmail:watch:${accountId}`,
+    JSON.stringify({
+      accountId,
+      userId: userId || accountId,
+      email: normalizedEmail,
+      encRefreshToken,
+      lastHistoryId,
+      expiration,
+      updatedAt: Date.now(),
+    })
+  );
+  await addAccountToEmailIndex(normalizedEmail, accountId, env);
+
+  console.log(
+    `Gmail watch created: ${accountId} (${normalizedEmail}) historyId=${historyId}`
+  );
+  return jsonResponse({ success: true, historyId, expiration });
+}
+
+// 停止 watch。users.stop 是按整个邮箱生效的，故仅当该邮箱再无设备注册时才真正 stop。
+async function handleGmailStop(request, env) {
+  const { accountId, email } = await request.json().catch(() => ({}));
+  if (!accountId) {
+    return jsonResponse({ error: 'Missing required fields' }, 400);
+  }
+
+  const record = await env.KV.get(`gmail:watch:${accountId}`, 'json');
+  const normalizedEmail = String(email || record?.email || '').toLowerCase();
+
+  await env.KV.delete(`gmail:watch:${accountId}`);
+
+  let remaining = [];
+  if (normalizedEmail) {
+    remaining = await removeAccountFromEmailIndex(
+      normalizedEmail,
+      accountId,
+      env
+    );
+  }
+
+  if (normalizedEmail && remaining.length === 0 && record?.encRefreshToken) {
+    try {
+      const refreshToken = await decryptSecret(record.encRefreshToken, env);
+      const accessToken = await gmailAccessTokenFromRefresh(refreshToken, env);
+      if (accessToken) {
+        await gmailApiFetch('/stop', accessToken, { method: 'POST' });
+      }
+    } catch (e) {
+      console.error('users.stop 失败（忽略）:', e);
+    }
+  }
+
+  console.log(
+    `Gmail watch stopped: ${accountId}（剩余设备 ${remaining.length}）`
+  );
+  return jsonResponse({ success: true });
+}
+
+// Pub/Sub push 投递目标：解析 historyId → 拉新邮件 → 发 FCM。
+async function handleGmailPush(request, env) {
+  const url = new URL(request.url);
+  if (
+    !env.GMAIL_PUSH_TOKEN ||
+    url.searchParams.get('token') !== env.GMAIL_PUSH_TOKEN
+  ) {
+    return new Response('Unauthorized', { status: 401 });
+  }
+
+  const envelope = await request.json().catch(() => null);
+  const decoded = parsePubsubEnvelope(envelope);
+  // 无法解析也返回 2xx：避免 Pub/Sub 对坏消息无限重投。
+  if (!decoded || !decoded.emailAddress) {
+    return new Response(null, { status: 204 });
+  }
+  const { emailAddress, historyId } = decoded;
+  console.log(`Gmail push: ${emailAddress} historyId=${historyId}`);
+
+  const accountIds = await getEmailIndex(emailAddress.toLowerCase(), env);
+  if (accountIds.length === 0) {
+    console.warn(`No account mapping for ${emailAddress}`);
+    return new Response(null, { status: 204 });
+  }
+
+  // 同邮箱多设备：各自独立处理（独立 lastHistoryId + 去重 + FCM token）。
+  for (const accountId of accountIds) {
+    try {
+      await processGmailHistory(accountId, historyId, env);
+    } catch (e) {
+      console.error(`processGmailHistory failed for ${accountId}:`, e);
+    }
+  }
+
+  return new Response(null, { status: 204 });
+}
+
+// 拉取自 lastHistoryId 起新增的 INBOX 邮件，解析主题/发件人后发 FCM。
+async function processGmailHistory(accountId, notifiedHistoryId, env) {
+  const record = await env.KV.get(`gmail:watch:${accountId}`, 'json');
+  if (!record) {
+    console.warn(`No watch record for ${accountId}`);
+    return;
+  }
+
+  const refreshToken = await decryptSecret(record.encRefreshToken, env);
+  const accessToken = await gmailAccessTokenFromRefresh(refreshToken, env);
+  if (!accessToken) {
+    console.error(`Token refresh failed for ${accountId}`);
+    return;
+  }
+
+  const fcmToken = await env.KV.get(`fcm:${record.userId}:${accountId}`);
+
+  const startHistoryId = record.lastHistoryId;
+  const histRes = await gmailApiFetch(
+    `/history?startHistoryId=${encodeURIComponent(startHistoryId)}` +
+      `&historyTypes=messageAdded&labelId=INBOX`,
+    accessToken
+  );
+
+  // historyId 过旧（邮箱太活跃 / 离线太久）：重置游标，发通用通知兜底。
+  if (histRes.status === 404) {
+    console.warn(`historyId ${startHistoryId} too old for ${accountId}, reset`);
+    const profile = await gmailApiFetch('/profile', accessToken);
+    if (profile.ok && profile.body.historyId) {
+      await updateLastHistoryId(accountId, profile.body.historyId, env);
+    }
+    if (fcmToken) {
+      await sendFCMMessage(
+        fcmToken,
+        { silent: false, title: '新邮件', body: '您有新邮件', changeType: 'created', accountId },
+        env
+      ).catch((e) => console.error('FCM failed:', e));
+    }
+    return;
+  }
+  if (!histRes.ok) {
+    console.error(`history.list failed for ${accountId}:`, JSON.stringify(histRes.body));
+    return;
+  }
+
+  // 收集 messagesAdded 中归到 INBOX 且非自己发出的新邮件 id。
+  const messageIds = new Set();
+  for (const h of histRes.body.history || []) {
+    for (const added of h.messagesAdded || []) {
+      const msg = added.message;
+      if (!msg || !msg.id) continue;
+      const labels = msg.labelIds || [];
+      if (!labels.includes('INBOX')) continue;
+      if (labels.includes('SENT') || labels.includes('DRAFT')) continue;
+      messageIds.add(msg.id);
+    }
+  }
+
+  for (const messageId of messageIds) {
+    // 去重：Pub/Sub at-least-once，同一封可能多次投递。
+    const dedupKey = `seen:${accountId}:${messageId}`;
+    if (await env.KV.get(dedupKey)) continue;
+    await env.KV.put(dedupKey, '1', { expirationTtl: 600 });
+
+    let title = '新邮件';
+    let body = '您有新邮件';
+    try {
+      const meta = await gmailApiFetch(
+        `/messages/${messageId}?format=metadata` +
+          `&metadataHeaders=Subject&metadataHeaders=From`,
+        accessToken
+      );
+      if (meta.ok) {
+        const headers = meta.body.payload?.headers || [];
+        const subject = headerValue(headers, 'Subject');
+        const from = parseFromHeader(headerValue(headers, 'From'));
+        const snippet = decodeSnippet(meta.body.snippet);
+        title = from || title;
+        body = buildNotificationBody(subject, snippet) || body;
+      }
+    } catch (e) {
+      console.error(`messages.get failed for ${messageId}:`, e);
+    }
+
+    if (!fcmToken) {
+      console.warn(`No FCM token for ${accountId}`);
+      continue;
+    }
+    await sendFCMMessage(
+      fcmToken,
+      { silent: false, title, body, changeType: 'created', messageId, accountId },
+      env
+    ).catch((e) => console.error('FCM failed:', e));
+  }
+
+  await updateLastHistoryId(accountId, notifiedHistoryId, env);
+}
+
+// Cron：遍历所有 watch 记录，刷新 token 后重新 watch 以重置 7 天有效期。
+async function renewAllGmailWatches(env) {
+  if (!env.GMAIL_PUBSUB_TOPIC) {
+    console.warn('GMAIL_PUBSUB_TOPIC 未配置，跳过 Gmail watch 续订');
+    return;
+  }
+  let cursor;
+  let renewed = 0;
+  let removed = 0;
+  do {
+    const list = await env.KV.list({ prefix: 'gmail:watch:', cursor });
+    for (const key of list.keys) {
+      const record = await env.KV.get(key.name, 'json');
+      if (!record?.encRefreshToken) continue;
+      try {
+        const refreshToken = await decryptSecret(record.encRefreshToken, env);
+        const tokenRes = await googleTokenRequest({
+          refresh_token: refreshToken,
+          client_id: env.GOOGLE_WEB_CLIENT_ID,
+          client_secret: env.GOOGLE_WEB_CLIENT_SECRET,
+          grant_type: 'refresh_token',
+        });
+        if (!tokenRes.ok) {
+          // 用户撤权 → 清理记录与索引。
+          if (tokenRes.body?.error === 'invalid_grant') {
+            await env.KV.delete(key.name);
+            if (record.email) {
+              await removeAccountFromEmailIndex(record.email, record.accountId, env);
+            }
+            removed++;
+          } else {
+            console.error(`续订刷新失败 ${key.name}:`, JSON.stringify(tokenRes.body));
+          }
+          continue;
+        }
+        const watchRes = await callGmailWatch(tokenRes.body.access_token, env);
+        if (watchRes.ok) {
+          record.expiration = watchRes.body.expiration;
+          record.updatedAt = Date.now();
+          // 保留 lastHistoryId，不回退。
+          await env.KV.put(key.name, JSON.stringify(record));
+          renewed++;
+        } else {
+          console.error(`watch 续订失败 ${key.name}:`, JSON.stringify(watchRes.body));
+        }
+      } catch (e) {
+        console.error(`续订异常 ${key.name}:`, e);
+      }
+    }
+    cursor = list.list_complete ? undefined : list.cursor;
+  } while (cursor);
+  console.log(`Gmail watch 续订完成: renewed=${renewed}, removed=${removed}`);
+}
+
+// ---- Gmail 工具函数 ----
+
+// 用 refresh token 换 access token（仅 Worker 持有 Web client secret）。
+async function gmailAccessTokenFromRefresh(refreshToken, env) {
+  if (!env.GOOGLE_WEB_CLIENT_ID || !env.GOOGLE_WEB_CLIENT_SECRET) {
+    console.error('Worker 未配置 GOOGLE_WEB_CLIENT_ID / GOOGLE_WEB_CLIENT_SECRET');
+    return null;
+  }
+  const res = await googleTokenRequest({
+    refresh_token: refreshToken,
+    client_id: env.GOOGLE_WEB_CLIENT_ID,
+    client_secret: env.GOOGLE_WEB_CLIENT_SECRET,
+    grant_type: 'refresh_token',
+  });
+  if (!res.ok) {
+    console.error('Gmail token refresh failed:', JSON.stringify(res.body));
+    return null;
+  }
+  return res.body.access_token;
+}
+
+async function callGmailWatch(accessToken, env) {
+  const response = await fetch(`${GMAIL_API_ROOT}/watch`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      topicName: env.GMAIL_PUBSUB_TOPIC,
+      labelIds: ['INBOX'],
+      labelFilterBehavior: 'INCLUDE',
+    }),
+  });
+  const body = await response.json().catch(() => ({}));
+  return { ok: response.ok, status: response.status, body };
+}
+
+// 带 Bearer 的 Gmail REST 调用；返回 { ok, status, body }。
+async function gmailApiFetch(pathAndQuery, accessToken, init = {}) {
+  const response = await fetch(`${GMAIL_API_ROOT}${pathAndQuery}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      ...(init.headers || {}),
+    },
+  });
+  const text = await response.text();
+  let body = {};
+  if (text) {
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = { raw: text };
+    }
+  }
+  return { ok: response.ok, status: response.status, body };
+}
+
+async function updateLastHistoryId(accountId, historyId, env) {
+  const record = await env.KV.get(`gmail:watch:${accountId}`, 'json');
+  if (!record) return;
+  record.lastHistoryId = String(historyId);
+  record.updatedAt = Date.now();
+  await env.KV.put(`gmail:watch:${accountId}`, JSON.stringify(record));
+}
+
+// 解析 Pub/Sub push 信封：message.data 是 base64 的 { emailAddress, historyId }。
+function parsePubsubEnvelope(envelope) {
+  try {
+    const data = envelope?.message?.data;
+    if (!data) return null;
+    const json = JSON.parse(new TextDecoder().decode(base64ToBytes(data)));
+    return { emailAddress: json.emailAddress, historyId: json.historyId };
+  } catch (e) {
+    console.error('parsePubsubEnvelope failed:', e);
+    return null;
+  }
+}
+
+function headerValue(headers, name) {
+  const lower = name.toLowerCase();
+  const found = headers.find((h) => (h.name || '').toLowerCase() === lower);
+  return found ? found.value : '';
+}
+
+// From: 形如 `"Name" <a@b.com>` / `Name <a@b.com>` / `a@b.com`。优先取显示名。
+function parseFromHeader(from) {
+  if (!from) return '';
+  const match = from.match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/);
+  if (match) {
+    const name = (match[1] || '').trim();
+    return name || match[2].trim();
+  }
+  return from.trim();
+}
+
+// Gmail snippet 含 HTML 实体，解码常见几个让通知更干净。
+function decodeSnippet(snippet) {
+  if (!snippet) return '';
+  return snippet
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .trim();
+}
+
+// ---- email → [accountId] 索引 ----
+
+async function getEmailIndex(email, env) {
+  const raw = await env.KV.get(`gmail:email:${email}`, 'json');
+  return Array.isArray(raw) ? raw : [];
+}
+
+async function addAccountToEmailIndex(email, accountId, env) {
+  const list = await getEmailIndex(email, env);
+  if (!list.includes(accountId)) {
+    list.push(accountId);
+    await env.KV.put(`gmail:email:${email}`, JSON.stringify(list));
+  }
+}
+
+// 移除后返回剩余 accountId 列表（供 stop 判断是否真正 users.stop）。
+async function removeAccountFromEmailIndex(email, accountId, env) {
+  const list = (await getEmailIndex(email, env)).filter((id) => id !== accountId);
+  if (list.length === 0) {
+    await env.KV.delete(`gmail:email:${email}`);
+  } else {
+    await env.KV.put(`gmail:email:${email}`, JSON.stringify(list));
+  }
+  return list;
+}
+
+// ---- AES-GCM：refresh token 加密后存 KV（KV_ENC_KEY = base64 的 32 字节）----
+
+let _kvAesKeyPromise;
+function getKvAesKey(env) {
+  if (!env.KV_ENC_KEY) throw new Error('Worker 未配置 KV_ENC_KEY');
+  _kvAesKeyPromise ??= crypto.subtle.importKey(
+    'raw',
+    base64ToBytes(env.KV_ENC_KEY),
+    { name: 'AES-GCM' },
+    false,
+    ['encrypt', 'decrypt']
+  );
+  return _kvAesKeyPromise;
+}
+
+async function encryptSecret(plaintext, env) {
+  const key = await getKvAesKey(env);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    new TextEncoder().encode(plaintext)
+  );
+  // 存 `base64(iv):base64(ciphertext)`。
+  return `${bytesToBase64(iv)}:${bytesToBase64(new Uint8Array(ct))}`;
+}
+
+async function decryptSecret(payload, env) {
+  const key = await getKvAesKey(env);
+  const [ivB64, ctB64] = String(payload).split(':');
+  const pt = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: base64ToBytes(ivB64) },
+    key,
+    base64ToBytes(ctB64)
+  );
+  return new TextDecoder().decode(pt);
+}
+
 // 发送 FCM 消息（FCM HTTP v1 API）。
-// data.silent=true：只发 data 消息（无 notification 块）——客户端静默触发同步、
-//   不在系统托盘显示（用于 updated 等已读/标志变更）。
-// data.silent=false：notification+data（新邮件托盘通知）。
+// - data.silent=true（updated）：纯 data 静默消息，客户端触发增量同步，不在托盘显示。
+// - data.silent=false（created）：notification + data 消息。notification 由系统/GMS
+//   直接弹到托盘，不依赖客户端进程被唤醒——国产 ROM 上送达率远高于 data-only；
+//   代价是通知不经过 app 代码，无法附加自定义操作按钮。data 仍带 accountId/messageId
+//   供用户点击通知后定位邮件并触发同步。
 async function sendFCMMessage(token, data, env) {
   // 1. 获取 OAuth 2.0 access token
   const accessToken = await getFirebaseAccessToken(env);
@@ -422,22 +1023,21 @@ async function sendFCMMessage(token, data, env) {
       click_action: 'FLUTTER_NOTIFICATION_CLICK',
     },
     android: {
-      // 数据消息也用 high 优先级，尽量在后台/doze 唤醒以触发同步（尽力而为）。
+      // high 优先级：尽量在后台/doze 下及时投递。
       priority: 'high',
     },
   };
 
+  // created：发 notification 消息，由系统直接弹到 everyemail_default 渠道
+  // （送达率优先，不附带自定义操作按钮）。updated 保持纯 data 静默。
   if (!data.silent) {
     message.notification = {
       title: data.title || '新邮件',
       body: data.body || '您有新邮件',
     };
     message.android.notification = {
-      // 指定 channel：必须和客户端 Manifest meta-data + Dart 端创建的 channel 一致，
-      // 否则 Android 8+ 会拒绝显示（"unknown channel"）。
       channel_id: 'everyemail_default',
       sound: 'default',
-      // 不指定 icon：让 Android 回退到 application launcher icon。
     };
   }
 

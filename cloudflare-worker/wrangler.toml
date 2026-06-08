@@ -14,6 +14,16 @@ id = "cf3d69d38f0144ad96a925ec6dc306cc"  # 运行 wrangler kv:namespace create "
 WORKER_URL = "https://ee-webhook.gemen.pp.ua"
 FIREBASE_PROJECT_ID = "970518560740"
 
+# Gmail 推送用的 Pub/Sub topic（users.watch 把变更发布到这里）。
+# 格式 projects/{PROJECT_ID 或编号}/topics/{TOPIC}，必须与你在 GCP 控制台建的 topic 一致。
+# 默认用 Firebase 项目编号；若你的项目 ID 是字符串形式，改成 projects/<your-project-id>/topics/gmail-push。
+GMAIL_PUBSUB_TOPIC = "projects/everyemail/topics/gmail-push"
+
+# Google OAuth「Web 应用」客户端 ID（非机密，放这里）。原生应用拿到的 server
+# auth code 由本 Worker 用它兑换 access/refresh token。把下面填成你的 Web 客户端 ID。
+# 对应的 secret 不入库：`wrangler secret put GOOGLE_WEB_CLIENT_SECRET`
+GOOGLE_WEB_CLIENT_ID = "970518560740-b2kmmkjbuvrmionap9vk4e7dd1citnqq.apps.googleusercontent.com"
+
 # 富通知加密（开启后推送通知含邮件主题/发件人）。两者都配齐才生效，
 # 留空则降级为通用文案“新邮件 / 您有新邮件”（去重修复不受影响）。
 # 生成证书：
@@ -23,6 +33,17 @@ FIREBASE_PROJECT_ID = "970518560740"
 # 下面填 enc_cert.pem 中 BEGIN/END CERTIFICATE 之间的 base64（去头尾、拼成一行）：
 ENCRYPTION_CERTIFICATE = "MIIDEzCCAfugAwIBAgIUclytljnmeUkfj/RhFfncx0v22FYwDQYJKoZIhvcNAQELBQAwGTEXMBUGA1UEAwwOZXZlcnllbWFpbC1mY20wHhcNMjYwNjA1MjMxMDM0WhcNMjYwNzA1MjMxMDM0WjAZMRcwFQYDVQQDDA5ldmVyeWVtYWlsLWZjbTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAMHWmkFOYCcs5GAOawooeiJbBr3jIN4Y4xHacDiKueEGHVsph+H1xBRtQPb+LGwKefZZfLTtM+O2VhZJ+YJUxEAyIHXKun/cOuhLrdEXfymzy90+vkKO3P9fGYuxKak9YOtGPFrziQs5orfzBv9J+0cZboAhP3Eh/6QHOgw/9Q0E+FR3VfKGoPcIkkqW/OkHUi8PyIvq8yrOFT90e831PKczxrvcJauvuW9+z9Fj3HPId25ok4XRWOo1w0aDoyqHzH2d31/WUuQoniQWBgrXhEbQq/imHRejAYgMK/CT9aWqEM3HIMFDrWptQoeDz7IlpKJ8y/QyWCb3W5nTrnOHx1sCAwEAAaNTMFEwHQYDVR0OBBYEFJmD10x5h+PQPw80s9D518X9H75sMB8GA1UdIwQYMBaAFJmD10x5h+PQPw80s9D518X9H75sMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggEBALoo6X4TD0Aja0lf7Tjeearyv8G9Z5+doCsQH1+j7BOr8TjH/jmXCSGAp9IXxsVYFQK0hUEeSvRKQ3d3YDUA1RHY4/aUcoYK9avV8GeK0zWsZWuTaSavOWvNS4LPIJMyzzFzICCkuhHJmj5M591vV5YGDFy/8L6YGZm+cLBMFg7+REe8uluHuERWBBJJbOKpGXj1dBM0oJ3SsuW4vt7pLkDuaMdhNObwL/djcy8/WuQjYkM9ic45IDfsSRRn4HjD08Wk1JfTKKXSBflKCfDQoUf6DiZod5wl9QlNfJSeIqWd4wnnzwmyjOfu0SBCeDXYEZ2kXjl8rYtdPmDuutArb7M="
 ENCRYPTION_CERTIFICATE_ID = "everyemail-key-1"
+
+# Gmail 推送的两个 secret（不入库，用 wrangler secret put 设置）：
+#   wrangler secret put GMAIL_PUSH_TOKEN   ← Pub/Sub push 订阅 URL 里带的共享密钥，
+#                                             用于校验 /gmail/push 请求来源（自己生成一串随机串）。
+#   wrangler secret put KV_ENC_KEY         ← base64 的 32 字节 AES-256 密钥，加密存入 KV 的
+#                                             Gmail refresh token。生成：openssl rand -base64 32
+
+# Cron Trigger：周期续订所有 Gmail watch（users.watch 最长 7 天过期）。
+# 每 12 小时跑一次（分钟取 13 避开整点）；触发 src/index.js 的 scheduled() → renewAllGmailWatches。
+[triggers]
+crons = ["13 */12 * * *"]
 
 [observability]
 enabled = true
