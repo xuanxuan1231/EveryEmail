@@ -59,6 +59,19 @@ class MailAttachment {
     };
   }
 
+  /// 复制并覆盖部分字段（下载完成后回写 [localPath] / [size]）。
+  MailAttachment copyWith({String? localPath, int? size}) {
+    return MailAttachment(
+      partId: partId,
+      mimeType: mimeType,
+      filename: filename,
+      size: size ?? this.size,
+      isInline: isInline,
+      contentId: contentId,
+      localPath: localPath ?? this.localPath,
+    );
+  }
+
   /// 获取文件扩展名。
   String get extension {
     if (filename != null && filename!.contains('.')) {
@@ -75,9 +88,15 @@ class MailAttachment {
     if (mimeType.startsWith('audio/')) return '🎵';
     if (mimeType.contains('pdf')) return '📄';
     if (mimeType.contains('word') || mimeType.contains('document')) return '📝';
-    if (mimeType.contains('excel') || mimeType.contains('spreadsheet')) return '📊';
-    if (mimeType.contains('powerpoint') || mimeType.contains('presentation')) return '📽️';
-    if (mimeType.contains('zip') || mimeType.contains('compressed')) return '🗜️';
+    if (mimeType.contains('excel') || mimeType.contains('spreadsheet')) {
+      return '📊';
+    }
+    if (mimeType.contains('powerpoint') || mimeType.contains('presentation')) {
+      return '📽️';
+    }
+    if (mimeType.contains('zip') || mimeType.contains('compressed')) {
+      return '🗜️';
+    }
     return '📎';
   }
 
@@ -102,9 +121,11 @@ class MailAttachment {
       'image/webp': 'webp',
       'application/pdf': 'pdf',
       'application/msword': 'doc',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
+          'docx',
       'application/vnd.ms-excel': 'xls',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':
+          'xlsx',
       'application/zip': 'zip',
       'text/plain': 'txt',
       'text/html': 'html',
@@ -123,7 +144,9 @@ class AttachmentUtils {
 
     try {
       final List<dynamic> list = jsonDecode(json);
-      return list.map((item) => MailAttachment.fromJson(item as Map<String, dynamic>)).toList();
+      return list
+          .map((item) => MailAttachment.fromJson(item as Map<String, dynamic>))
+          .toList();
     } catch (e) {
       return [];
     }

@@ -19,43 +19,45 @@ import '../token_provider.dart';
 /// - /me/messages - 邮件查询
 /// - /me/mailFolders/{id}/messages/delta - 增量同步
 class GraphMailBackend implements MailBackend {
-  GraphMailBackend({
-    required this.account,
-    required this.tokenProvider,
-  }) : _dio = Dio(BaseOptions(
+  GraphMailBackend({required this.account, required this.tokenProvider})
+    : _dio = Dio(
+        BaseOptions(
           baseUrl: 'https://graph.microsoft.com/v1.0',
           headers: {'Content-Type': 'application/json'},
-        )) {
+        ),
+      ) {
     // 添加认证拦截器
-    _dio.interceptors.add(InterceptorsWrapper(
-      onRequest: (options, handler) async {
-        try {
-          final token = await tokenProvider();
-          options.headers['Authorization'] = 'Bearer $token';
-          handler.next(options);
-        } catch (e) {
-          handler.reject(
-            DioException(
-              requestOptions: options,
-              error: MailAuthException('获取访问令牌失败', cause: e),
-            ),
-          );
-        }
-      },
-      onError: (error, handler) {
-        if (error.response?.statusCode == 401) {
-          handler.reject(
-            DioException(
-              requestOptions: error.requestOptions,
-              response: error.response,
-              error: const MailAuthException('Graph API 认证失败（401）'),
-            ),
-          );
-        } else {
-          handler.next(error);
-        }
-      },
-    ));
+    _dio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (options, handler) async {
+          try {
+            final token = await tokenProvider();
+            options.headers['Authorization'] = 'Bearer $token';
+            handler.next(options);
+          } catch (e) {
+            handler.reject(
+              DioException(
+                requestOptions: options,
+                error: MailAuthException('获取访问令牌失败', cause: e),
+              ),
+            );
+          }
+        },
+        onError: (error, handler) {
+          if (error.response?.statusCode == 401) {
+            handler.reject(
+              DioException(
+                requestOptions: error.requestOptions,
+                response: error.response,
+                error: const MailAuthException('Graph API 认证失败（401）'),
+              ),
+            );
+          } else {
+            handler.next(error);
+          }
+        },
+      ),
+    );
   }
 
   final AccountConfig account;
@@ -127,10 +129,7 @@ class GraphMailBackend implements MailBackend {
     } on DioException catch (e) {
       final status = e.response?.statusCode;
       final body = e.response?.data;
-      throw MailBackendException(
-        '列出文件夹失败 (HTTP $status): $body',
-        cause: e,
-      );
+      throw MailBackendException('列出文件夹失败 (HTTP $status): $body', cause: e);
     }
   }
 
@@ -153,7 +152,8 @@ class GraphMailBackend implements MailBackend {
       final params = {
         '\$top': limit,
         '\$orderby': 'receivedDateTime desc',
-        '\$select': 'id,subject,from,toRecipients,ccRecipients,'
+        '\$select':
+            'id,subject,from,toRecipients,ccRecipients,'
             'receivedDateTime,bodyPreview,isRead,flag,hasAttachments,'
             'conversationId,internetMessageId',
       };
@@ -193,7 +193,15 @@ class GraphMailBackend implements MailBackend {
     }
 
     try {
-      final response = await _dio.get('/me/messages/${ref.messageId}');
+      // 单次请求拿正文 + 附件元数据：$expand 内联附件，省去原先的第二次
+      // /attachments 往返，约腰斩点开延迟。$select=body 仅取正文，减小负载。
+      final response = await _dio.get(
+        '/me/messages/${ref.messageId}',
+        queryParameters: {
+          '\$select': 'body',
+          '\$expand': 'attachments(\$select=id,name,contentType,size)',
+        },
+      );
       final json = response.data as Map<String, dynamic>;
 
       // 获取正文
@@ -201,13 +209,9 @@ class GraphMailBackend implements MailBackend {
       final bodyContent = body?['content'] as String?;
       final bodyType = body?['contentType'] as String?;
 
-      // 获取附件
-      final attachmentsResponse = await _dio.get(
-        '/me/messages/${ref.messageId}/attachments',
-        queryParameters: {'\$select': 'id,name,contentType,size'},
-      );
-
-      final attachments = (attachmentsResponse.data['value'] as List)
+      // 内联的附件元数据（无则为空）
+      final attachmentsJson = json['attachments'] as List? ?? const [];
+      final attachments = attachmentsJson
           .map((json) => _mapAttachment(json as Map<String, dynamic>))
           .toList();
 
@@ -241,13 +245,14 @@ class GraphMailBackend implements MailBackend {
   @override
   Future<SyncResult> syncDelta(MailboxFolder folder, SyncToken? token) async {
     try {
-      final url = token?.value ??
-          '/me/mailFolders/${folder.remoteId}/messages/delta';
+      final url =
+          token?.value ?? '/me/mailFolders/${folder.remoteId}/messages/delta';
 
       final response = await _dio.get(
         url,
         queryParameters: {
-          '\$select': 'id,subject,from,toRecipients,ccRecipients,'
+          '\$select':
+              'id,subject,from,toRecipients,ccRecipients,'
               'receivedDateTime,bodyPreview,isRead,flag,hasAttachments,'
               'conversationId,internetMessageId',
         },
@@ -263,10 +268,12 @@ class GraphMailBackend implements MailBackend {
         final json = item as Map<String, dynamic>;
         if (json.containsKey('@removed')) {
           // 邮件已删除
-          removedRefs.add(GraphRef(
-            messageId: json['id'] as String,
-            folderId: folder.remoteId,
-          ));
+          removedRefs.add(
+            GraphRef(
+              messageId: json['id'] as String,
+              folderId: folder.remoteId,
+            ),
+          );
         } else {
           // 新增或更新
           added.add(_mapMessage(json, folder));
@@ -287,21 +294,21 @@ class GraphMailBackend implements MailBackend {
   Future<void> markRead(List<MessageRef> refs, {required bool read}) async {
     for (final ref in refs) {
       if (ref is! GraphRef) continue;
-      await _dio.patch(
-        '/me/messages/${ref.messageId}',
-        data: {'isRead': read},
-      );
+      await _dio.patch('/me/messages/${ref.messageId}', data: {'isRead': read});
     }
   }
 
   @override
-  Future<void> markFlagged(List<MessageRef> refs, {required bool flagged}) async {
+  Future<void> markFlagged(
+    List<MessageRef> refs, {
+    required bool flagged,
+  }) async {
     for (final ref in refs) {
       if (ref is! GraphRef) continue;
       await _dio.patch(
         '/me/messages/${ref.messageId}',
         data: {
-          'flag': {'flagStatus': flagged ? 'flagged' : 'notFlagged'}
+          'flag': {'flagStatus': flagged ? 'flagged' : 'notFlagged'},
         },
       );
     }
@@ -311,12 +318,10 @@ class GraphMailBackend implements MailBackend {
   Future<void> moveToFolder(List<MessageRef> refs, MailboxFolder target) async {
     for (final ref in refs) {
       if (ref is! GraphRef) continue;
-      try {
-        await _dio.post(
-          '/me/messages/${ref.messageId}/move',
-          data: {'destinationId': target.remoteId},
-        );
-      } catch (_) {}
+      await _dio.post(
+        '/me/messages/${ref.messageId}/move',
+        data: {'destinationId': target.remoteId},
+      );
     }
   }
 
@@ -324,9 +329,7 @@ class GraphMailBackend implements MailBackend {
   Future<void> delete(List<MessageRef> refs) async {
     for (final ref in refs) {
       if (ref is! GraphRef) continue;
-      try {
-        await _dio.delete('/me/messages/${ref.messageId}');
-      } catch (_) {}
+      await _dio.delete('/me/messages/${ref.messageId}');
     }
   }
 
@@ -339,7 +342,10 @@ class GraphMailBackend implements MailBackend {
     }).asyncMap((event) => event);
   }
 
-  MailboxFolder _mapFolder(Map<String, dynamic> json, {required FolderType type}) {
+  MailboxFolder _mapFolder(
+    Map<String, dynamic> json, {
+    required FolderType type,
+  }) {
     return MailboxFolder(
       id: '', // 由仓储层填充
       accountId: account.id,
@@ -365,12 +371,11 @@ class GraphMailBackend implements MailBackend {
 
     return MessageEnvelope(
       localId: '', // 由仓储层填充
-      ref: GraphRef(
-        messageId: json['id'] as String,
-        folderId: folder.remoteId,
-      ),
+      ref: GraphRef(messageId: json['id'] as String, folderId: folder.remoteId),
       accountId: account.id,
-      folderId: folder.id.isEmpty ? folder.remoteId : folder.id, // 使用 remoteId 作为临时 ID
+      folderId: folder.id.isEmpty
+          ? folder.remoteId
+          : folder.id, // 使用 remoteId 作为临时 ID
       subject: json['subject'] as String? ?? '',
       date: DateTime.parse(json['receivedDateTime'] as String),
       from: fromAddr != null

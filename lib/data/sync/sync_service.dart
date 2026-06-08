@@ -1,24 +1,30 @@
+// ignore_for_file: prefer_initializing_formals
+
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../../core/utils/id_generator.dart' as id_gen;
 import '../../domain/enums/account_enums.dart';
 import '../../domain/enums/message_enums.dart';
 import '../../domain/models/account_config.dart';
+import '../../domain/models/mail_attachment.dart';
 import '../../domain/models/mailbox_folder.dart';
 import '../../domain/models/message_envelope.dart';
 import '../../domain/models/message_ref.dart';
 import '../auth/oauth_service.dart';
+import '../backends/gmail/gmail_mail_backend.dart';
 import '../backends/graph/graph_mail_backend.dart';
 import '../backends/imap/imap_mail_backend.dart';
 import '../backends/mail_backend.dart';
 import '../backends/sync_types.dart';
-import '../backends/token_provider.dart';
 import '../local/database/app_database.dart';
 import '../secure/token_store.dart';
+import '../settings/account_settings.dart';
 
 /// 邮件同步服务：编排后端同步与数据库持久化。
 ///
@@ -32,9 +38,9 @@ class SyncService {
     required AppDatabase db,
     required TokenStore tokenStore,
     required OAuthService oauthService,
-  })  : _db = db,
-        _tokenStore = tokenStore,
-        _oauthService = oauthService;
+  }) : _db = db,
+       _tokenStore = tokenStore,
+       _oauthService = oauthService;
 
   final AppDatabase _db;
   final TokenStore _tokenStore;
@@ -94,23 +100,21 @@ class SyncService {
     MailBackend backend;
     switch (account.type) {
       case AccountType.gmailOAuth:
+        // Gmail REST API 后端（取代 IMAP，避免列表同步整封下载正文）。
+        backend = GmailApiBackend(
+          account: account,
+          tokenProvider: () => getAccessToken(account),
+        );
+        break;
+
       case AccountType.genericImap:
-        // IMAP 后端
+        // 通用 IMAP 后端（密码 / 应用专用密码）。
         String? password;
         if (account.secretRef != null) {
           password = await _tokenStore.readPassword(account.secretRef!);
         }
 
-        AccessTokenProvider? tokenProvider;
-        if (account.type == AccountType.gmailOAuth && account.secretRef != null) {
-          tokenProvider = () => getAccessToken(account);
-        }
-
-        backend = ImapMailBackend(
-          account: account,
-          password: password,
-          tokenProvider: tokenProvider,
-        );
+        backend = ImapMailBackend(account: account, password: password);
         break;
 
       case AccountType.microsoftGraph:
@@ -129,6 +133,28 @@ class SyncService {
     await backend.connect();
     _backends[account.id] = backend;
     return backend;
+  }
+
+  /// 缓存的 IMAP 后端是否已过 OAuth 连接新鲜期，需要重连以刷新 access token。
+  /// 无缓存后端 / 非 IMAP / 密码连接均为 false（详见 [ImapMailBackend.isStale]）。
+  bool isBackendStale(AccountConfig account) {
+    final backend = _backends[account.id];
+    return backend is ImapMailBackend && backend.isStale;
+  }
+
+  /// 在账户串行队列上重连后端：重建底层连接、经 tokenProvider 取当前有效 token。
+  /// 走队列以与同步/取信等操作互斥，避免重建 client 时撞上进行中的命令流。
+  /// 无缓存后端则忽略（下次 [_getBackend] 会以全新 token 建连）。
+  ///
+  /// 注意：重连会使该后端当前的 IDLE 监听失效——调用方（实时协调器）须随后重建监听。
+  Future<void> reconnectBackend(AccountConfig account) async {
+    final backend = _backends[account.id];
+    if (backend is! ImapMailBackend) return;
+    await _runOnAccount<void>(
+      account.id,
+      backend.reconnect,
+      highPriority: true,
+    );
   }
 
   /// 从 [accountId] 重建领域模型 [AccountConfig]（[_getBackend] 需要它）。
@@ -164,11 +190,32 @@ class SyncService {
     );
   }
 
-  /// 每账户同步串行链：保证同一账户不并发同步。
-  final Map<String, Future<void>> _accountSyncChain = {};
+  /// 每账户后端访问串行队列：同步、按需取正文、后台预取都经由此队列，
+  /// 保证同一账户不并发触碰单条后端连接（IMAP 单 client；enough_mail 的
+  /// select-then-fetch 跨调用非原子，并发会选错邮箱）。高优先级（用户点开）
+  /// 排在低优先级（后台预取）之前。
+  final Map<String, _AccountBackendQueue> _backendQueues = {};
+
+  /// 某文件夹同步落库后回调（folderId, folderType）。由 BodyPrefetchService 挂接，
+  /// 用于在收件箱增量同步后批量预取最新邮件正文。SyncService 不反向依赖预取服务，
+  /// 避免循环依赖。
+  void Function(String folderId, FolderType folderType)? onFolderSynced;
 
   /// 每账户合并触发的去抖定时器。
   final Map<String, Timer> _syncDebounce = {};
+
+  /// 在指定账户的串行队列上执行后端操作。
+  Future<T> _runOnAccount<T>(
+    String accountId,
+    Future<T> Function() action, {
+    bool highPriority = false,
+  }) {
+    final queue = _backendQueues.putIfAbsent(
+      accountId,
+      _AccountBackendQueue.new,
+    );
+    return queue.add(action, highPriority: highPriority);
+  }
 
   /// 合并触发窗口：把一阵触发（Graph 一封新邮件连发的多条 updated 静默推送、
   /// 或 IMAP IDLE 连续事件）压成一次 [syncAccount]。
@@ -180,9 +227,11 @@ class SyncService {
     _syncDebounce[account.id]?.cancel();
     _syncDebounce[account.id] = Timer(_syncDebounceWindow, () {
       _syncDebounce.remove(account.id);
-      unawaited(syncAccount(account).catchError((Object e) {
-        debugPrint('requestSync: 同步失败: $e');
-      }));
+      unawaited(
+        syncAccount(account).catchError((Object e) {
+          debugPrint('requestSync: 同步失败: $e');
+        }),
+      );
     });
   }
 
@@ -191,25 +240,20 @@ class SyncService {
   /// 同一账户的并发调用（手动刷新 / FCM 静默推送 / IMAP IDLE 触发）会被串行化，
   /// 避免同时操作同一后端连接造成命令流交错。
   Future<void> syncAccount(AccountConfig account) async {
-    final prev = _accountSyncChain[account.id];
-    final completer = Completer<void>();
-    _accountSyncChain[account.id] = completer.future;
-    if (prev != null) {
-      try {
-        await prev;
-      } catch (_) {}
-    }
-    try {
-      await _syncAccountInner(account);
-    } finally {
-      if (identical(_accountSyncChain[account.id], completer.future)) {
-        _accountSyncChain.remove(account.id);
-      }
-      completer.complete();
-    }
+    final accountSettings = await AccountSettingsStore.read(account.id);
+    if (!accountSettings.receiveEnabled) return;
+
+    // 经由账户串行队列：与按需取正文、后台预取互斥，避免并发触碰同一后端连接。
+    await _runOnAccount(
+      account.id,
+      () => _syncAccountInner(account, accountSettings),
+    );
   }
 
-  Future<void> _syncAccountInner(AccountConfig account) async {
+  Future<void> _syncAccountInner(
+    AccountConfig account,
+    AccountSettings accountSettings,
+  ) async {
     // 先把本地待推送变更（已读/标星/移动/删除等）刷到服务端，
     // 否则随后的 delta 会用服务端旧值覆盖刚改完的本地新值。
     await flushOutbox(account);
@@ -222,7 +266,10 @@ class SyncService {
     // 2. 持久化文件夹
     for (final folder in folders) {
       // 检查是否已存在
-      var existing = await _db.folderDao.getByRemoteId(account.id, folder.remoteId);
+      var existing = await _db.folderDao.getByRemoteId(
+        account.id,
+        folder.remoteId,
+      );
 
       if (existing == null) {
         // 新文件夹：生成 ID 并插入
@@ -254,11 +301,14 @@ class SyncService {
         existing = await _db.folderDao.getFolder(existing.id);
       }
 
-      // 3. 同步文件夹邮件（inbox、sent、drafts）
-      if (folder.type == FolderType.inbox ||
-          folder.type == FolderType.sent ||
-          folder.type == FolderType.drafts) {
-        await syncFolder(account, existing!);
+      // 3. 按账户设置与文件夹开关同步文件夹邮件。
+      final localFolder = existing!;
+      if (localFolder.syncEnabled &&
+          accountSettings.canSyncFolder(
+            localFolder.folderType,
+            isSubscribed: localFolder.isSubscribed,
+          )) {
+        await syncFolder(account, localFolder);
       }
     }
   }
@@ -269,13 +319,12 @@ class SyncService {
 
     // 获取同步游标
     final syncState = await _db.messageDao.getSyncState(folder.id);
-    final token = syncState?.deltaLink != null ? SyncToken(syncState!.deltaLink!) : null;
+    final token = syncState?.deltaLink != null
+        ? SyncToken(syncState!.deltaLink!)
+        : null;
 
     // 执行增量同步
-    final result = await backend.syncDelta(
-      folder.toMailboxFolder(),
-      token,
-    );
+    final result = await backend.syncDelta(folder.toMailboxFolder(), token);
 
     // 持久化新增/更新的邮件
     await _persistMessages(result.added, folder);
@@ -292,7 +341,16 @@ class SyncService {
           final msg = await _db.messageDao.getByImapUid(folder.id, ref.uid);
           if (msg != null) removedIds.add(msg.id);
         } else if (ref is GraphRef) {
-          final msg = await _db.messageDao.getByGraphId(account.id, ref.messageId);
+          final msg = await _db.messageDao.getByGraphId(
+            account.id,
+            ref.messageId,
+          );
+          if (msg != null) removedIds.add(msg.id);
+        } else if (ref is GmailRef) {
+          final msg = await _db.messageDao.getByGmailId(
+            account.id,
+            ref.messageId,
+          );
           if (msg != null) removedIds.add(msg.id);
         }
       }
@@ -311,10 +369,16 @@ class SyncService {
         ),
       );
     }
+
+    // 落库完成：通知预取服务（收件箱等）按需批量预取最新邮件正文。
+    onFolderSynced?.call(folder.id, folder.folderType);
   }
 
   /// 持久化邮件列表到数据库。
-  Future<void> _persistMessages(List<MessageEnvelope> envelopes, Folder folder) async {
+  Future<void> _persistMessages(
+    List<MessageEnvelope> envelopes,
+    Folder folder,
+  ) async {
     final companions = <MessagesCompanion>[];
 
     for (final envelope in envelopes) {
@@ -325,7 +389,16 @@ class SyncService {
         existing = await _db.messageDao.getByImapUid(folder.id, ref.uid);
       } else if (envelope.ref is GraphRef) {
         final ref = envelope.ref as GraphRef;
-        existing = await _db.messageDao.getByGraphId(envelope.accountId, ref.messageId);
+        existing = await _db.messageDao.getByGraphId(
+          envelope.accountId,
+          ref.messageId,
+        );
+      } else if (envelope.ref is GmailRef) {
+        final ref = envelope.ref as GmailRef;
+        existing = await _db.messageDao.getByGmailId(
+          envelope.accountId,
+          ref.messageId,
+        );
       }
 
       final messageId = existing?.id ?? id_gen.generateId();
@@ -337,8 +410,15 @@ class SyncService {
           accountId: Value(envelope.accountId),
           folderId: Value(folder.id),
           imapUid: ref is ImapRef ? Value(ref.uid) : const Value.absent(),
-          imapUidValidity: ref is ImapRef ? Value(ref.uidValidity) : const Value.absent(),
-          graphMessageId: ref is GraphRef ? Value(ref.messageId) : const Value.absent(),
+          imapUidValidity: ref is ImapRef
+              ? Value(ref.uidValidity)
+              : const Value.absent(),
+          graphMessageId: ref is GraphRef
+              ? Value(ref.messageId)
+              : const Value.absent(),
+          gmailMessageId: ref is GmailRef
+              ? Value(ref.messageId)
+              : const Value.absent(),
           subject: Value(envelope.subject),
           fromName: Value(envelope.from?.name),
           fromEmail: Value(envelope.from?.email),
@@ -350,6 +430,7 @@ class SyncService {
           hasAttachments: Value(envelope.hasAttachments),
           threadKey: Value(envelope.threadKey),
           messageIdHeader: Value(envelope.messageIdHeader),
+          labels: Value(jsonEncode(envelope.labels)),
         ),
       );
     }
@@ -376,6 +457,8 @@ class SyncService {
         local = await _db.messageDao.getByImapUid(folder.id, ref.uid);
       } else if (ref is GraphRef) {
         local = await _db.messageDao.getByGraphId(account.id, ref.messageId);
+      } else if (ref is GmailRef) {
+        local = await _db.messageDao.getByGmailId(account.id, ref.messageId);
       }
       if (local != null) {
         await _db.messageDao.updateFlags(local.id, _flagsToBitmask(env.flags));
@@ -406,11 +489,15 @@ class SyncService {
     if (recipients.isEmpty) return '[]';
 
     // 正确的 JSON 数组格式
-    final jsonList = recipients.map((r) {
-      final name = (r.name ?? '').replaceAll('"', '\\"').replaceAll('\n', ' ');
-      final email = (r.email ?? '').replaceAll('"', '\\"');
-      return '{"name":"$name","email":"$email"}';
-    }).join(',');
+    final jsonList = recipients
+        .map((r) {
+          final name = (r.name ?? '')
+              .replaceAll('"', '\\"')
+              .replaceAll('\n', ' ');
+          final email = (r.email ?? '').replaceAll('"', '\\"');
+          return '{"name":"$name","email":"$email"}';
+        })
+        .join(',');
 
     return '[$jsonList]';
   }
@@ -445,11 +532,26 @@ class SyncService {
   /// 下载并持久化某封邮件的正文与附件元数据（附件字节本身不在此下载）。
   ///
   /// 详情页打开邮件时调用：先查本地，缺正文才拉取后端并写入 [MessageBodies]，
-  /// 之后 `MessageDao.watchBody` 会让 UI 自动刷新预览。
+  /// 之后 `MessageDao.watchBody` 会让 UI 自动刷新预览。用户即时操作，走账户串行
+  /// 队列的**高优先级**，排在后台预取之前。
   ///
   /// 幂等：正文行只在成功下载后写入，故"已存在且非 notDownloaded"即视为已下载，
   /// 默认跳过；[force] 为 true 时强制重新拉取（手动重试 / 重新下载）。失败向上抛。
-  Future<void> fetchMessageBody(String messageId, {bool force = false}) async {
+  Future<void> fetchMessageBody(String messageId, {bool force = false}) {
+    return _fetchAndStoreBody(messageId, force: force, highPriority: true);
+  }
+
+  /// 后台预取正文：与 [fetchMessageBody] 同逻辑，但走账户串行队列的**低优先级**，
+  /// 不抢占用户点开的高优先级取正文。仅在缺正文时拉取。
+  Future<void> prefetchMessageBody(String messageId) {
+    return _fetchAndStoreBody(messageId, force: false, highPriority: false);
+  }
+
+  Future<void> _fetchAndStoreBody(
+    String messageId, {
+    required bool force,
+    required bool highPriority,
+  }) async {
     final message = await _db.messageDao.getMessage(messageId);
     if (message == null) return;
 
@@ -461,31 +563,112 @@ class SyncService {
       }
     }
 
-    final ref = await _refForMessage(messageId);
-    if (ref == null) {
-      throw Exception('无法定位邮件，无法下载正文');
+    await _runOnAccount<void>(message.accountId, () async {
+      // 取得队列槽位后再查一次：另一任务（点开 + 预取并发）可能已经下完。
+      if (!force) {
+        final existing = await _db.messageDao.getBody(messageId);
+        if (existing != null &&
+            existing.fetchState != BodyFetchState.notDownloaded) {
+          return;
+        }
+      }
+
+      final ref = await _refForMessage(messageId);
+      if (ref == null) {
+        throw Exception('无法定位邮件，无法下载正文');
+      }
+
+      final account = await accountConfigFor(message.accountId);
+      final backend = await _getBackend(account);
+      final content = await backend.fetchMessageContent(ref);
+
+      await _db.messageDao.upsertBody(
+        MessageBodiesCompanion.insert(
+          messageId: messageId,
+          plainText: Value(content.plainText),
+          htmlBody: Value(content.htmlBody),
+          fetchState: Value(
+            content.attachments.isEmpty
+                ? BodyFetchState.full
+                : BodyFetchState.partial,
+          ),
+          attachmentsMeta: Value(
+            jsonEncode([for (final a in content.attachments) a.toJson()]),
+          ),
+          fetchedAt: Value(DateTime.now()),
+        ),
+      );
+    }, highPriority: highPriority);
+  }
+
+  /// 下载附件字节并存为本地文件，返回文件绝对路径；同时把 localPath 回写进正文行的
+  /// attachmentsMeta —— 响应式 `watchBody` 会让详情页附件项自动切换为"已下载/打开"。
+  ///
+  /// 幂等：若该附件已有 localPath 且文件仍在，直接返回缓存路径，不重复下载。
+  /// 取字节走账户串行队列的高优先级，与正文下载/同步互斥。
+  Future<String> downloadAttachment({
+    required String messageId,
+    required String partId,
+  }) async {
+    final message = await _db.messageDao.getMessage(messageId);
+    if (message == null) {
+      throw Exception('邮件不存在，无法下载附件');
+    }
+
+    final body = await _db.messageDao.getBody(messageId);
+    final attachments = AttachmentUtils.parseAttachments(body?.attachmentsMeta);
+    MailAttachment? meta;
+    for (final a in attachments) {
+      if (a.partId == partId) {
+        meta = a;
+        break;
+      }
+    }
+
+    // 已下载且文件还在 → 直接复用。
+    final cached = meta?.localPath;
+    if (cached != null && cached.isNotEmpty && await File(cached).exists()) {
+      return cached;
     }
 
     final account = await accountConfigFor(message.accountId);
-    final backend = await _getBackend(account);
-    final content = await backend.fetchMessageContent(ref);
+    final bytes = await _runOnAccount<List<int>>(account.id, () async {
+      final ref = await _refForMessage(messageId);
+      if (ref == null) {
+        throw Exception('无法定位邮件，无法下载附件');
+      }
+      final backend = await _getBackend(account);
+      return backend.fetchAttachmentBytes(ref, partId);
+    }, highPriority: true);
 
-    await _db.messageDao.upsertBody(
-      MessageBodiesCompanion.insert(
-        messageId: messageId,
-        plainText: Value(content.plainText),
-        htmlBody: Value(content.htmlBody),
-        fetchState: Value(
-          content.attachments.isEmpty
-              ? BodyFetchState.full
-              : BodyFetchState.partial,
-        ),
-        attachmentsMeta: Value(
-          jsonEncode([for (final a in content.attachments) a.toJson()]),
-        ),
-        fetchedAt: Value(DateTime.now()),
-      ),
+    // 存到 <app docs>/attachments/<messageId>/<partId>-<安全文件名>。
+    final dir = await getApplicationDocumentsDirectory();
+    final attachDir = Directory('${dir.path}/attachments/$messageId');
+    await attachDir.create(recursive: true);
+    final safeName = _safeFileName(meta?.filename ?? partId);
+    final file = File('${attachDir.path}/$partId-$safeName');
+    await file.writeAsBytes(bytes, flush: true);
+
+    // 回写 localPath（与 size 兜底）到 attachmentsMeta。
+    final updated = [
+      for (final a in attachments)
+        if (a.partId == partId)
+          a.copyWith(localPath: file.path, size: a.size ?? bytes.length)
+        else
+          a,
+    ];
+    await _db.messageDao.updateAttachmentsMeta(
+      messageId,
+      AttachmentUtils.encodeAttachments(updated),
     );
+
+    return file.path;
+  }
+
+  /// 把文件名清成文件系统安全的形式（保留字母数字/点/横杠，其余折成下划线）。
+  String _safeFileName(String name) {
+    final cleaned = name.replaceAll(RegExp(r'[^\w.\-]+'), '_');
+    return cleaned.isEmpty ? 'attachment' : cleaned;
   }
 
   /// 修改邮件的 [flag] 状态：先乐观更新本地 DB，再入队（由下次 [flushOutbox]
@@ -531,6 +714,102 @@ class SyncService {
     });
   }
 
+  /// 删除邮件：本地立即移除，并把后端删除操作入队。
+  Future<void> deleteMessage(String messageId) async {
+    final message = await _db.messageDao.getMessage(messageId);
+    if (message == null) return;
+
+    final refPayload = await _refPayloadForMessage(message);
+    if (refPayload == null) {
+      await _db.messageDao.deleteMessages([messageId]);
+      return;
+    }
+
+    await _db.transaction(() async {
+      await _db.outboxDao.removeOpsForMessage(
+        message.accountId,
+        messageId,
+        const ['move', 'delete'],
+      );
+      await _db.outboxDao.enqueue(
+        OutboxOpsCompanion.insert(
+          accountId: message.accountId,
+          opType: 'delete',
+          payload: Value(
+            jsonEncode({'messageId': messageId, 'ref': refPayload}),
+          ),
+        ),
+      );
+      await _db.messageDao.deleteMessages([messageId]);
+    });
+  }
+
+  /// 移动邮件到指定文件夹：本地立即更新，并把后端移动操作入队。
+  Future<void> moveMessageToFolder(
+    String messageId,
+    String targetFolderId,
+  ) async {
+    final message = await _db.messageDao.getMessage(messageId);
+    if (message == null || message.folderId == targetFolderId) return;
+
+    final targetFolder = await _db.folderDao.getFolder(targetFolderId);
+    if (targetFolder == null) {
+      throw Exception('目标文件夹不存在: $targetFolderId');
+    }
+    if (targetFolder.accountId != message.accountId) {
+      throw Exception('不能跨账户移动邮件');
+    }
+
+    final refPayload = await _refPayloadForMessage(message);
+    if (refPayload == null) {
+      await _db.messageDao.moveMessage(messageId, targetFolderId);
+      return;
+    }
+
+    await _db.transaction(() async {
+      await _db.outboxDao.removeOpsForMessage(
+        message.accountId,
+        messageId,
+        const ['move'],
+      );
+      await _db.messageDao.moveMessage(messageId, targetFolderId);
+      await _db.outboxDao.enqueue(
+        OutboxOpsCompanion.insert(
+          accountId: message.accountId,
+          opType: 'move',
+          payload: Value(
+            jsonEncode({
+              'messageId': messageId,
+              'targetFolderId': targetFolderId,
+              'ref': refPayload,
+            }),
+          ),
+        ),
+      );
+    });
+  }
+
+  /// 移动邮件到某个语义文件夹（如归档 / 垃圾邮件）。
+  Future<void> moveMessageToFolderType(
+    String messageId,
+    FolderType folderType,
+  ) async {
+    final message = await _db.messageDao.getMessage(messageId);
+    if (message == null) return;
+
+    var targetFolder = await _folderByType(message.accountId, folderType);
+    if (targetFolder == null) {
+      final account = await accountConfigFor(message.accountId);
+      await syncAccount(account);
+      targetFolder = await _folderByType(message.accountId, folderType);
+    }
+    if (targetFolder == null) {
+      throw Exception('账户没有可用的${_folderTypeLabel(folderType)}文件夹');
+    }
+
+    await moveMessageToFolder(messageId, targetFolder.id);
+  }
+
   String? _opTypeFor(MessageFlag flag, bool value) {
     switch (flag) {
       case MessageFlag.seen:
@@ -543,6 +822,10 @@ class SyncService {
   }
 
   /// 把账户的 outbox 待推送变更刷到后端。失败的条目保留并累计 attempts。
+  ///
+  /// 同类操作（已读/未读/星标/取消星标/删除，以及按目标分组的移动）会**归并成一次**
+  /// 后端调用——Gmail 后端据此走 `messages.batchModify`，把 N 个请求压成 1 个。
+  /// 后端的写方法本就接收 refs 列表（Graph/IMAP 内部循环），故对三种后端都兼容。
   Future<void> flushOutbox(AccountConfig account) async {
     final pending = await _db.outboxDao.getPendingForAccount(account.id);
     if (pending.isEmpty) return;
@@ -554,6 +837,16 @@ class SyncService {
       debugPrint('flushOutbox: 获取后端失败，跳过本轮: $e');
       return;
     }
+    final b = backend; // 此处已非空，捕获给闭包用。
+
+    // 1) 解析每条 op 为 (op, ref) 并按操作意图分桶；无效 / 超阈值的就地丢弃。
+    final markReadOps = <(OutboxOp, MessageRef)>[];
+    final markUnreadOps = <(OutboxOp, MessageRef)>[];
+    final flagOps = <(OutboxOp, MessageRef)>[];
+    final unflagOps = <(OutboxOp, MessageRef)>[];
+    final deleteOps = <(OutboxOp, MessageRef)>[];
+    // 移动按目标文件夹分组：targetFolderId → (目标文件夹, 该组 ops)。
+    final moveGroups = <String, (Folder, List<(OutboxOp, MessageRef)>)>{};
 
     for (final op in pending) {
       // 失败次数超过阈值就丢弃，避免坏条目无限阻塞队列。
@@ -564,42 +857,102 @@ class SyncService {
         continue;
       }
 
+      Map<String, dynamic> payload;
       try {
-        final payload = jsonDecode(op.payload) as Map<String, dynamic>;
-        final messageId = payload['messageId'] as String?;
-        if (messageId == null) {
-          await _db.outboxDao.remove(op.id);
-          continue;
-        }
-        final ref = await _refForMessage(messageId);
-        if (ref == null) {
-          // 邮件已不存在；丢弃避免无限重试。
-          await _db.outboxDao.remove(op.id);
-          continue;
-        }
-
-        switch (op.opType) {
-          case 'markRead':
-            await backend.markRead([ref], read: true);
-            break;
-          case 'markUnread':
-            await backend.markRead([ref], read: false);
-            break;
-          case 'flag':
-            await backend.markFlagged([ref], flagged: true);
-            break;
-          case 'unflag':
-            await backend.markFlagged([ref], flagged: false);
-            break;
-          default:
-            // 其它类型暂未实现，先丢弃避免阻塞队列。
-            debugPrint('flushOutbox: 未支持的 opType=${op.opType}, 丢弃');
-            await _db.outboxDao.remove(op.id);
-            continue;
-        }
+        payload = jsonDecode(op.payload) as Map<String, dynamic>;
+      } catch (_) {
         await _db.outboxDao.remove(op.id);
-      } catch (e) {
-        debugPrint('flushOutbox: 推送 ${op.opType} 失败: $e');
+        continue;
+      }
+      final messageId = payload['messageId'] as String?;
+      if (messageId == null) {
+        await _db.outboxDao.remove(op.id);
+        continue;
+      }
+      final ref =
+          _refFromPayload(payload['ref']) ?? await _refForMessage(messageId);
+      if (ref == null) {
+        await _db.outboxDao.remove(op.id); // 邮件已不存在
+        continue;
+      }
+
+      final opType = op.opType;
+      if (opType == 'markRead') {
+        markReadOps.add((op, ref));
+      } else if (opType == 'markUnread') {
+        markUnreadOps.add((op, ref));
+      } else if (opType == 'flag') {
+        flagOps.add((op, ref));
+      } else if (opType == 'unflag') {
+        unflagOps.add((op, ref));
+      } else if (opType == 'delete') {
+        deleteOps.add((op, ref));
+      } else if (opType == 'move') {
+        final targetFolderId = payload['targetFolderId'] as String?;
+        if (targetFolderId == null) {
+          await _db.outboxDao.remove(op.id);
+          continue;
+        }
+        final targetFolder = await _db.folderDao.getFolder(targetFolderId);
+        if (targetFolder == null) {
+          await _db.outboxDao.remove(op.id);
+          continue;
+        }
+        moveGroups.putIfAbsent(targetFolderId, () => (targetFolder, [])).$2.add(
+          (op, ref),
+        );
+      } else {
+        debugPrint('flushOutbox: 未支持的 opType=$opType, 丢弃');
+        await _db.outboxDao.remove(op.id);
+      }
+    }
+
+    // 2) 每桶一次性推送；成功移除桶内全部 op，失败则整桶累计 attempts。
+    await _flushBucket(
+      markReadOps,
+      () => b.markRead(_refsOf(markReadOps), read: true),
+    );
+    await _flushBucket(
+      markUnreadOps,
+      () => b.markRead(_refsOf(markUnreadOps), read: false),
+    );
+    await _flushBucket(
+      flagOps,
+      () => b.markFlagged(_refsOf(flagOps), flagged: true),
+    );
+    await _flushBucket(
+      unflagOps,
+      () => b.markFlagged(_refsOf(unflagOps), flagged: false),
+    );
+    await _flushBucket(deleteOps, () => b.delete(_refsOf(deleteOps)));
+    for (final group in moveGroups.values) {
+      final (folder, ops) = group;
+      await _flushBucket(
+        ops,
+        () => b.moveToFolder(_refsOf(ops), folder.toMailboxFolder()),
+      );
+    }
+  }
+
+  List<MessageRef> _refsOf(List<(OutboxOp, MessageRef)> ops) => [
+    for (final (_, ref) in ops) ref,
+  ];
+
+  /// 执行一个分桶的后端调用：成功移除桶内全部 op，失败则整桶 markFailed（沿用
+  /// 每条 op 的 attempts 阈值，下轮再试 / 到阈值丢弃）。
+  Future<void> _flushBucket(
+    List<(OutboxOp, MessageRef)> ops,
+    Future<void> Function() action,
+  ) async {
+    if (ops.isEmpty) return;
+    try {
+      await action();
+      for (final (op, _) in ops) {
+        await _db.outboxDao.remove(op.id);
+      }
+    } catch (e) {
+      debugPrint('flushOutbox: 批量推送失败（${ops.length} 条）: $e');
+      for (final (op, _) in ops) {
         await _db.outboxDao.markFailed(op.id, e.toString());
       }
     }
@@ -608,6 +961,18 @@ class SyncService {
   Future<MessageRef?> _refForMessage(String messageId) async {
     final m = await _db.messageDao.getMessage(messageId);
     if (m == null) return null;
+    return _refForStoredMessage(m);
+  }
+
+  Future<MessageRef?> _refForStoredMessage(Message m) async {
+    if (m.gmailMessageId != null) {
+      final folder = await _db.folderDao.getFolder(m.folderId);
+      return GmailRef(
+        messageId: m.gmailMessageId!,
+        labelId: folder?.remoteId ?? '',
+        threadId: m.threadKey,
+      );
+    }
     if (m.graphMessageId != null) {
       final folder = await _db.folderDao.getFolder(m.folderId);
       return GraphRef(
@@ -627,12 +992,97 @@ class SyncService {
     return null;
   }
 
+  Future<Map<String, dynamic>?> _refPayloadForMessage(Message message) async {
+    final ref = await _refForStoredMessage(message);
+    return _refToPayload(ref);
+  }
+
+  Map<String, dynamic>? _refToPayload(MessageRef? ref) {
+    return switch (ref) {
+      GraphRef(:final messageId, :final folderId) => {
+        'type': 'graph',
+        'messageId': messageId,
+        'folderId': folderId,
+      },
+      GmailRef(:final messageId, :final labelId, :final threadId) => {
+        'type': 'gmail',
+        'messageId': messageId,
+        'labelId': labelId,
+        'threadId': ?threadId,
+      },
+      ImapRef(:final folderPath, :final uid, :final uidValidity) => {
+        'type': 'imap',
+        'folderPath': folderPath,
+        'uid': uid,
+        'uidValidity': uidValidity,
+      },
+      null => null,
+    };
+  }
+
+  MessageRef? _refFromPayload(Object? raw) {
+    if (raw is! Map) return null;
+    final type = raw['type'] as String?;
+    switch (type) {
+      case 'graph':
+        final messageId = raw['messageId'] as String?;
+        if (messageId == null || messageId.isEmpty) return null;
+        return GraphRef(
+          messageId: messageId,
+          folderId: raw['folderId'] as String? ?? '',
+        );
+      case 'gmail':
+        final messageId = raw['messageId'] as String?;
+        if (messageId == null || messageId.isEmpty) return null;
+        return GmailRef(
+          messageId: messageId,
+          labelId: raw['labelId'] as String? ?? '',
+          threadId: raw['threadId'] as String?,
+        );
+      case 'imap':
+        final folderPath = raw['folderPath'] as String?;
+        final uid = raw['uid'] as int?;
+        final uidValidity = raw['uidValidity'] as int?;
+        if (folderPath == null || uid == null || uidValidity == null) {
+          return null;
+        }
+        return ImapRef(
+          folderPath: folderPath,
+          uid: uid,
+          uidValidity: uidValidity,
+        );
+      default:
+        return null;
+    }
+  }
+
+  Future<Folder?> _folderByType(String accountId, FolderType folderType) async {
+    final folders = await _db.folderDao.getFolders(accountId);
+    for (final folder in folders) {
+      if (folder.folderType == folderType) return folder;
+    }
+    return null;
+  }
+
+  String _folderTypeLabel(FolderType folderType) {
+    return switch (folderType) {
+      FolderType.inbox => '收件箱',
+      FolderType.sent => '已发送',
+      FolderType.drafts => '草稿',
+      FolderType.trash => '废纸篓',
+      FolderType.spam => '垃圾邮件',
+      FolderType.archive => '归档',
+      FolderType.custom => '自定义',
+    };
+  }
+
   /// 断开所有后端连接。
   Future<void> dispose() async {
     for (final t in _syncDebounce.values) {
       t.cancel();
     }
     _syncDebounce.clear();
+    _backendQueues.clear();
     for (final backend in _backends.values) {
       await backend.disconnect();
     }
@@ -656,7 +1106,10 @@ class SyncService {
       onProgress?.call(0.3);
       // 2. 持久化文件夹
       for (final folder in folders) {
-        var existing = await _db.folderDao.getByRemoteId(account.id, folder.remoteId);
+        var existing = await _db.folderDao.getByRemoteId(
+          account.id,
+          folder.remoteId,
+        );
 
         if (existing == null) {
           final folderId = id_gen.generateId();
@@ -678,11 +1131,21 @@ class SyncService {
 
       onProgress?.call(0.4);
       // 3. 同步收件箱（限制数量）
-      final inboxFolder = folders.where((f) => f.type == FolderType.inbox).firstOrNull;
+      final inboxFolder = folders
+          .where((f) => f.type == FolderType.inbox)
+          .firstOrNull;
       if (inboxFolder != null) {
-        final dbFolder = await _db.folderDao.getByRemoteId(account.id, inboxFolder.remoteId);
+        final dbFolder = await _db.folderDao.getByRemoteId(
+          account.id,
+          inboxFolder.remoteId,
+        );
         if (dbFolder != null) {
-          await _syncFolderWithLimit(account, dbFolder, messageLimit, onProgress);
+          await _syncFolderWithLimit(
+            account,
+            dbFolder,
+            messageLimit,
+            onProgress,
+          );
         }
       } else {
         onProgress?.call(1.0);
@@ -706,7 +1169,9 @@ class SyncService {
 
     // 获取同步状态
     final syncState = await _db.messageDao.getSyncState(folder.id);
-    final token = syncState?.deltaLink != null ? SyncToken(syncState!.deltaLink!) : null;
+    final token = syncState?.deltaLink != null
+        ? SyncToken(syncState!.deltaLink!)
+        : null;
 
     // 执行增量同步
     final result = await backend.syncDelta(folder.toMailboxFolder(), token);
@@ -721,7 +1186,16 @@ class SyncService {
           final msg = await _db.messageDao.getByImapUid(folder.id, ref.uid);
           if (msg != null) removedIds.add(msg.id);
         } else if (ref is GraphRef) {
-          final msg = await _db.messageDao.getByGraphId(account.id, ref.messageId);
+          final msg = await _db.messageDao.getByGraphId(
+            account.id,
+            ref.messageId,
+          );
+          if (msg != null) removedIds.add(msg.id);
+        } else if (ref is GmailRef) {
+          final msg = await _db.messageDao.getByGmailId(
+            account.id,
+            ref.messageId,
+          );
           if (msg != null) removedIds.add(msg.id);
         }
       }
@@ -768,5 +1242,49 @@ extension FolderExt on Folder {
       unreadCount: unreadCount,
       totalCount: totalCount,
     );
+  }
+}
+
+/// 单账户后端访问串行队列。
+///
+/// 同一时刻只跑一个任务；任务结束后**先**取高优先级（用户点开取正文），
+/// 再取低优先级（后台预取）。这样后台预取大量入队时，用户点开仍能尽快插队执行。
+class _AccountBackendQueue {
+  final List<_QueuedTask<dynamic>> _high = [];
+  final List<_QueuedTask<dynamic>> _low = [];
+  bool _running = false;
+
+  Future<T> add<T>(Future<T> Function() action, {required bool highPriority}) {
+    final task = _QueuedTask<T>(action);
+    (highPriority ? _high : _low).add(task);
+    _drain();
+    return task.completer.future;
+  }
+
+  void _drain() {
+    if (_running) return;
+    _running = true;
+    Future<void>(() async {
+      while (_high.isNotEmpty || _low.isNotEmpty) {
+        final task = _high.isNotEmpty ? _high.removeAt(0) : _low.removeAt(0);
+        await task.run();
+      }
+    }).whenComplete(() => _running = false);
+  }
+}
+
+class _QueuedTask<T> {
+  _QueuedTask(this.action);
+
+  final Future<T> Function() action;
+  final Completer<T> completer = Completer<T>();
+
+  Future<void> run() async {
+    try {
+      final result = await action();
+      if (!completer.isCompleted) completer.complete(result);
+    } catch (error, stackTrace) {
+      if (!completer.isCompleted) completer.completeError(error, stackTrace);
+    }
   }
 }
