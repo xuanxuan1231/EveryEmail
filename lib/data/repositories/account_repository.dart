@@ -2,13 +2,17 @@
 
 import 'package:drift/drift.dart';
 
+import '../../core/platform/avatar_image_picker.dart';
 import '../../core/utils/id_generator.dart';
 import '../../domain/enums/account_enums.dart';
 import '../../domain/models/account_config.dart';
 import '../auth/oauth_service.dart';
 import '../autoconfig/discovery_service.dart';
 import '../local/database/app_database.dart';
+import '../local/file_store.dart';
 import '../secure/token_store.dart';
+import '../settings/account_settings.dart';
+import '../webhook/gmail_watch_manager.dart';
 import '../webhook/webhook_manager.dart';
 
 /// 账户仓储：编排自动配置发现、OAuth/密码认证、凭据安全存储与 Drift 持久化。
@@ -21,11 +25,13 @@ class AccountRepository {
     required OAuthService oauthService,
     DiscoveryService? discovery,
     WebhookManager? webhookManager,
+    GmailWatchManager? gmailWatchManager,
   }) : _db = db,
        _tokenStore = tokenStore,
        _oauth = oauthService,
        _discovery = discovery ?? const DiscoveryService(),
-       _webhookManager = webhookManager;
+       _webhookManager = webhookManager,
+       _gmailWatchManager = gmailWatchManager;
 
   final AppDatabase _db;
   final TokenStore _tokenStore;
@@ -34,6 +40,9 @@ class AccountRepository {
 
   /// 可选：删除账户时用来拆除 Graph 订阅 + FCM 映射。为空则跳过拆除。
   final WebhookManager? _webhookManager;
+
+  /// 可选：删除账户时用来停掉 Gmail watch + 清 FCM 映射。为空则跳过拆除。
+  final GmailWatchManager? _gmailWatchManager;
 
   /// 监听全部账户。
   Stream<List<Account>> watchAccounts() => _db.accountDao.watchAccounts();
@@ -65,6 +74,7 @@ class AccountRepository {
 
     final accountId = generateId();
     final secretRef = accountId; // 一对一，直接复用 accountId 作为密钥引用。
+    final sortIndex = await _nextSortIndex();
     await _tokenStore.writeRefreshToken(secretRef, refresh);
 
     await _db.accountDao.upsertAccount(
@@ -82,6 +92,7 @@ class AccountRepository {
         smtpPort: Value(discovered.smtp?.port),
         smtpSocketType: Value(discovered.smtp?.socketType),
         loginName: Value(email),
+        sortIndex: Value(sortIndex),
       ),
     );
     return accountId;
@@ -98,6 +109,7 @@ class AccountRepository {
   }) async {
     final accountId = generateId();
     final secretRef = accountId;
+    final sortIndex = await _nextSortIndex();
     await _tokenStore.writePassword(secretRef, password);
 
     await _db.accountDao.upsertAccount(
@@ -115,12 +127,41 @@ class AccountRepository {
         smtpPort: Value(smtp.port),
         smtpSocketType: Value(smtp.socketType),
         loginName: Value(loginName ?? email),
+        sortIndex: Value(sortIndex),
       ),
     );
     return accountId;
   }
 
-  /// 移除账户：拆除推送订阅 + 清安全存储 + 级联删除 Drift 行（文件清理由调用方做）。
+  /// 按 UI 传入的账户 ID 顺序重写排序序号。
+  Future<void> reorderAccounts(List<String> orderedAccountIds) {
+    return _db.accountDao.updateSortOrder(orderedAccountIds);
+  }
+
+  /// 更新账户在本地 UI 中展示的资料。
+  Future<void> updateAccountProfile(
+    String accountId, {
+    String? displayName,
+    Value<int?> colorValue = const Value.absent(),
+  }) {
+    final normalizedName = displayName?.trim();
+    if (displayName != null &&
+        (normalizedName == null || normalizedName.isEmpty)) {
+      throw ArgumentError.value(displayName, 'displayName', '账户名称不能为空');
+    }
+
+    return _db.accountDao.updateProfile(
+      accountId,
+      displayName: normalizedName,
+      colorValue: colorValue,
+    );
+  }
+
+  /// 移除账户：拆推送订阅 + 清安全存储 + 级联删除 Drift 行 + 清理本地文件/头像/偏好。
+  ///
+  /// 删除账户行会随外键级联清掉其文件夹/邮件/正文/同步游标/发件箱。之后的本地文件、
+  /// 头像图片、SharedPreferences 偏好清理均为 best-effort：各自吞掉异常、互不影响，
+  /// 也不回滚已经完成的账户删除。
   Future<void> removeAccount(String accountId) async {
     final account = await _db.accountDao.getAccount(accountId);
 
@@ -133,10 +174,37 @@ class AccountRepository {
       }
     }
 
+    // Gmail watch 拆除：停 watch（Worker 清 KV + 加密 refresh token）+ 注销 FCM。
+    if (account != null && _gmailWatchManager != null) {
+      try {
+        await _gmailWatchManager.tearDownForAccount(toConfig(account));
+      } catch (e) {
+        // 同上：失败不阻塞删除；Worker Cron 命中 invalid_grant 也会兜底清理。
+      }
+    }
+
     if (account?.secretRef != null) {
       await _tokenStore.deleteSecrets(account!.secretRef!);
     }
     await _db.accountDao.deleteAccount(accountId);
+
+    // 本地痕迹清理：库行已删，下面任一步失败都不影响账户已被移除的结果。
+    try {
+      final fileStore = await FileStore.init();
+      await fileStore.deleteAccountFiles(accountId);
+    } catch (e) {
+      // 附件文件删除失败（IO/权限）忽略：残留字节已无任何库行引用。
+    }
+    try {
+      await AvatarImagePicker.deleteAccountAvatarImages(accountId);
+    } catch (e) {
+      // 头像图片删除失败忽略。
+    }
+    try {
+      await AccountSettingsStore.clear(accountId);
+    } catch (e) {
+      // 偏好清理失败忽略：键按 accountId 命名，不会与未来新账户冲突。
+    }
   }
 
   /// 把 Drift 行映射为领域模型 [AccountConfig]。
@@ -165,5 +233,14 @@ class AccountRepository {
               socketType: row.smtpSocketType ?? SocketType.ssl,
             ),
     );
+  }
+
+  Future<int> _nextSortIndex() async {
+    final rows = await _db.accountDao.getAccounts();
+    var next = 0;
+    for (final row in rows) {
+      if (row.sortIndex >= next) next = row.sortIndex + 1;
+    }
+    return next;
   }
 }

@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../domain/enums/account_enums.dart';
 import '../../domain/models/account_config.dart';
 import '../local/database/app_database.dart';
+import '../settings/account_settings.dart';
 import '../sync/sync_service.dart';
 import 'webhook_service.dart';
 
@@ -230,6 +231,13 @@ class WebhookManager {
         return;
       }
 
+      final accountSettings = await AccountSettingsStore.read(accountId);
+      if (!accountSettings.receiveEnabled ||
+          !accountSettings.realtimeSyncEnabled) {
+        debugPrint('账户已关闭接收或实时同步，跳过推送触发: $accountId');
+        return;
+      }
+
       final account = _rowToConfig(accountData);
 
       // 去抖 + 串行触发：一封新邮件 Graph 会连发多条 updated 静默推送，
@@ -245,7 +253,9 @@ class WebhookManager {
 
   void _startAutoRenew(AccountConfig account) {
     _renewTimers.remove(account.id)?.cancel();
-    _renewTimers[account.id] = Timer.periodic(const Duration(days: 2), (_) async {
+    _renewTimers[account.id] = Timer.periodic(const Duration(days: 2), (
+      _,
+    ) async {
       debugPrint('自动续订订阅: ${account.email}');
       await _renewSubscription(account);
     });
