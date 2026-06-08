@@ -5,9 +5,11 @@ import 'package:m3e_core/m3e_core.dart';
 
 import '../../app/providers.dart';
 import '../../core/navigation/predictive_back_shared_element.dart';
+import '../../core/theme/mail_list_colors.dart';
 import '../../core/theme/theme_ext.dart';
 import '../../data/local/database/app_database.dart';
 import '../../data/local/database/message_with_account.dart';
+import '../../data/settings/display_settings.dart';
 import '../../domain/enums/message_enums.dart';
 import '../../domain/models/account_config.dart';
 import '../../domain/models/unified_mailbox.dart';
@@ -84,6 +86,25 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   @override
   Widget build(BuildContext context) {
+    // 选中的真实账户被删除后，回退到统一收件箱：否则会停留在空邮件列表，
+    // 且下拉刷新里按 _selectedAccountId 查找账户会失败。
+    ref.listen(accountsStreamProvider, (previous, next) {
+      next.whenData((accounts) {
+        final selectedId = _selectedAccountId;
+        if (selectedId == null ||
+            UnifiedMailbox.isUnifiedAccountId(selectedId)) {
+          return;
+        }
+        if (accounts.any((account) => account.id == selectedId)) return;
+        setState(() {
+          _selectedAccountId = UnifiedMailbox.account.id;
+          _selectedFolderId = UnifiedMailbox.inbox.id;
+          _selectedFolderName = UnifiedMailbox.inbox.title;
+          _drawerAccountId = UnifiedMailbox.account.id;
+        });
+      });
+    });
+
     final accountsAsync = ref.watch(accountsStreamProvider);
 
     return accountsAsync.when(
@@ -153,10 +174,9 @@ class _HomePageState extends ConsumerState<HomePage> {
         onSearchTap: () {
           context.push('/search');
         },
-        onSettingsTap: () {
-          context.push('/settings');
-        },
         onMessageTap: (message) {
+          // 点击即抢先下载正文（高优先级），与导航转场重叠，争取点开即见内容。
+          ref.read(bodyPrefetchServiceProvider).enqueueOnTap(message.id);
           context.push(
             '/message/${Uri.encodeComponent(message.id)}',
             extra: message,
@@ -171,11 +191,13 @@ class _HomePageState extends ConsumerState<HomePage> {
               await _syncAccount(syncService, account);
             }
           } else if (_selectedAccountId != null) {
-            // 同步选中的账户
-            final account = accounts.firstWhere(
-              (a) => a.id == _selectedAccountId,
-            );
-            await _syncAccount(syncService, account);
+            // 同步选中的账户（若已被删除则跳过，避免查找失败）。
+            for (final account in accounts) {
+              if (account.id == _selectedAccountId) {
+                await _syncAccount(syncService, account);
+                break;
+              }
+            }
           }
         },
       ),
@@ -811,7 +833,10 @@ class _HomePageState extends ConsumerState<HomePage> {
     return StreamBuilder<List<Folder>>(
       stream: db.folderDao.watchFolders(account.id),
       builder: (context, snapshot) {
-        final folders = snapshot.data ?? [];
+        // 隐藏被用户关闭「显示文件夹」的文件夹（管理文件夹页仍可见以便重新开启）。
+        final folders = (snapshot.data ?? [])
+            .where((folder) => folder.visible)
+            .toList();
 
         if (folders.isEmpty) {
           return M3ECardList(
@@ -1112,8 +1137,17 @@ class _HomePageState extends ConsumerState<HomePage> {
   }
 }
 
+enum _MessageListMenuAction {
+  selectAll,
+  markAllRead,
+  archiveSelected,
+  flagSelected,
+  unflagSelected,
+  clearSelection,
+}
+
 /// 邮件列表组件（移动端优化）。
-class _MessageList extends ConsumerWidget {
+class _MessageList extends ConsumerStatefulWidget {
   const _MessageList({
     required this.title,
     required this.subtitle,
@@ -1122,10 +1156,12 @@ class _MessageList extends ConsumerWidget {
     required this.accountId,
     required this.onMenuTap,
     required this.onSearchTap,
-    required this.onSettingsTap,
     required this.onMessageTap,
     required this.onRefresh,
   });
+
+  @override
+  ConsumerState<_MessageList> createState() => _MessageListState();
 
   final String title;
   final String? subtitle;
@@ -1134,55 +1170,256 @@ class _MessageList extends ConsumerWidget {
   final String? accountId;
   final VoidCallback onMenuTap;
   final VoidCallback onSearchTap;
-  final VoidCallback onSettingsTap;
   final ValueChanged<Message> onMessageTap;
   final Future<void> Function() onRefresh;
+}
+
+class _MessageListState extends ConsumerState<_MessageList> {
+  static const double _mediumAppBarExpandedHeight = 112;
+  static const double _mediumAppBarCollapsedHeight = 64;
+  static const double _mediumAppBarCollapseDistance =
+      _mediumAppBarExpandedHeight - _mediumAppBarCollapsedHeight;
+
+  final Set<String> _selectedMessageIds = <String>{};
+  bool _batchInProgress = false;
+
+  String get title => widget.title;
+  String? get subtitle => widget.subtitle;
+  UnifiedMailboxFolder? get unifiedFolder => widget.unifiedFolder;
+  String? get folderId => widget.folderId;
+  String? get accountId => widget.accountId;
+  VoidCallback get onMenuTap => widget.onMenuTap;
+  VoidCallback get onSearchTap => widget.onSearchTap;
+  ValueChanged<Message> get onMessageTap => widget.onMessageTap;
+  Future<void> Function() get onRefresh => widget.onRefresh;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  void didUpdateWidget(covariant _MessageList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final oldUnifiedFolderId = oldWidget.unifiedFolder?.id;
+    final nextUnifiedFolderId = widget.unifiedFolder?.id;
+    if (oldWidget.accountId != widget.accountId ||
+        oldWidget.folderId != widget.folderId ||
+        oldUnifiedFolderId != nextUnifiedFolderId) {
+      _selectedMessageIds.clear();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final displaySettings = ref.watch(displaySettingsProvider);
+    late final Widget content;
 
     // 统一账户下的聚合文件夹
     if (unifiedFolder != null) {
-      return _buildUnifiedFolder(context, ref, theme, unifiedFolder!);
+      content = _buildUnifiedFolder(
+        context,
+        ref,
+        theme,
+        unifiedFolder!,
+        displaySettings,
+      );
     }
-
     // 单个真实账户的邮件聚合视图
-    if (accountId != null && folderId == null) {
-      return _buildAccountInbox(context, ref, theme);
+    else if (accountId != null && folderId == null) {
+      content = _buildAccountInbox(context, ref, theme, displaySettings);
     }
-
     // 特定文件夹
-    if (folderId != null) {
-      return _buildFolderView(context, ref, theme);
-    }
-
-    return _buildStatusScrollView(
-      theme,
-      Center(
-        child: Text(
-          '请选择文件夹',
-          style: theme.textTheme.bodyLarge?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
+    else if (folderId != null) {
+      content = _buildFolderView(context, ref, theme, displaySettings);
+    } else {
+      content = _buildStatusScrollView(
+        theme,
+        Center(
+          child: Text(
+            '请选择文件夹',
+            style: theme.textTheme.bodyLarge?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
           ),
         ),
-      ),
+      );
+    }
+
+    return PopScope(
+      canPop: _selectedMessageIds.isEmpty,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && _selectedMessageIds.isNotEmpty) {
+          _clearSelection();
+        }
+      },
+      child: content,
     );
   }
 
-  Widget _buildSliverAppBar(ThemeData theme) {
-    return SliverAppBar.medium(
-      pinned: true,
-      backgroundColor: theme.colorScheme.surface,
-      surfaceTintColor: theme.colorScheme.surfaceTint,
-      scrolledUnderElevation: 2,
-      leading: IconButton(icon: const Icon(Icons.menu), onPressed: onMenuTap),
-      title: _buildAppBarTitle(theme),
-      actions: [
-        IconButton(icon: const Icon(Icons.search), onPressed: onSearchTap),
-        IconButton(icon: const Icon(Icons.more_vert), onPressed: onSettingsTap),
-      ],
+  Widget _buildSliverAppBar(ThemeData theme, List<Message> visibleMessages) {
+    return SliverLayoutBuilder(
+      builder: (context, constraints) {
+        final collapsed =
+            constraints.scrollOffset >= _mediumAppBarCollapseDistance;
+        final selectedMessages = _selectedMessagesFrom(visibleMessages);
+        final selectedCount = _selectedMessageIds.length;
+        final selectionMode = selectedCount > 0;
+        final markSelectionAsRead = selectedMessages.any((m) => !_isRead(m));
+
+        return SliverAppBar.medium(
+          pinned: true,
+          backgroundColor: collapsed
+              ? mailListAppBarSurfaceColor(theme)
+              : theme.colorScheme.surface,
+          surfaceTintColor: Colors.transparent,
+          scrolledUnderElevation: 0,
+          shadowColor: Colors.transparent,
+          shape: collapsed
+              ? Border(
+                  bottom: BorderSide(color: mailListAppBarDividerColor(theme)),
+                )
+              : null,
+          leading: IconButton(
+            icon: Icon(selectionMode ? Icons.close : Icons.menu),
+            tooltip: selectionMode ? '取消选择' : '菜单',
+            onPressed: selectionMode ? _clearSelection : onMenuTap,
+          ),
+          title: selectionMode
+              ? Text('已选择 $selectedCount 封')
+              : _buildAppBarTitle(theme),
+          actions: [
+            if (!selectionMode)
+              IconButton(icon: const Icon(Icons.search), onPressed: onSearchTap)
+            else ...[
+              IconButton(
+                icon: Icon(
+                  markSelectionAsRead
+                      ? Icons.mark_email_read_outlined
+                      : Icons.mark_email_unread_outlined,
+                ),
+                tooltip: markSelectionAsRead ? '标为已读' : '标为未读',
+                onPressed: selectedMessages.isEmpty || _batchInProgress
+                    ? null
+                    : () => _setReadForMessages(
+                        context,
+                        selectedMessages,
+                        read: markSelectionAsRead,
+                      ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.delete_outline),
+                tooltip: '删除',
+                onPressed: selectedMessages.isEmpty || _batchInProgress
+                    ? null
+                    : () => _deleteMessages(context, selectedMessages),
+              ),
+            ],
+            PopupMenuButton<_MessageListMenuAction>(
+              tooltip: '更多',
+              icon: const Icon(Icons.more_vert),
+              onSelected: (value) =>
+                  _handleMenuAction(context, visibleMessages, value),
+              itemBuilder: (context) => selectionMode
+                  ? _buildSelectionMenuItems(visibleMessages, selectedMessages)
+                  : _buildListMenuItems(visibleMessages),
+            ),
+          ],
+        );
+      },
     );
+  }
+
+  List<PopupMenuEntry<_MessageListMenuAction>> _buildListMenuItems(
+    List<Message> visibleMessages,
+  ) {
+    final hasUnread = visibleMessages.any((m) => !_isRead(m));
+    return [
+      PopupMenuItem<_MessageListMenuAction>(
+        value: _MessageListMenuAction.selectAll,
+        enabled: visibleMessages.isNotEmpty,
+        child: const Row(
+          children: [
+            Icon(Icons.select_all_outlined),
+            SizedBox(width: 12),
+            Text('全选'),
+          ],
+        ),
+      ),
+      PopupMenuItem<_MessageListMenuAction>(
+        value: _MessageListMenuAction.markAllRead,
+        enabled: hasUnread && !_batchInProgress,
+        child: const Row(
+          children: [
+            Icon(Icons.mark_email_read_outlined),
+            SizedBox(width: 12),
+            Text('全部标为已读'),
+          ],
+        ),
+      ),
+    ];
+  }
+
+  List<PopupMenuEntry<_MessageListMenuAction>> _buildSelectionMenuItems(
+    List<Message> visibleMessages,
+    List<Message> selectedMessages,
+  ) {
+    final allVisibleSelected =
+        visibleMessages.isNotEmpty &&
+        visibleMessages.every(
+          (message) => _selectedMessageIds.contains(message.id),
+        );
+    final enabled = selectedMessages.isNotEmpty && !_batchInProgress;
+
+    return [
+      PopupMenuItem<_MessageListMenuAction>(
+        value: _MessageListMenuAction.selectAll,
+        enabled: visibleMessages.isNotEmpty && !allVisibleSelected,
+        child: const Row(
+          children: [
+            Icon(Icons.select_all_outlined),
+            SizedBox(width: 12),
+            Text('全选'),
+          ],
+        ),
+      ),
+      PopupMenuItem<_MessageListMenuAction>(
+        value: _MessageListMenuAction.archiveSelected,
+        enabled: enabled,
+        child: const Row(
+          children: [
+            Icon(Icons.archive_outlined),
+            SizedBox(width: 12),
+            Text('归档'),
+          ],
+        ),
+      ),
+      PopupMenuItem<_MessageListMenuAction>(
+        value: _MessageListMenuAction.flagSelected,
+        enabled: enabled,
+        child: const Row(
+          children: [
+            Icon(Icons.star_border_outlined),
+            SizedBox(width: 12),
+            Text('加星标'),
+          ],
+        ),
+      ),
+      PopupMenuItem<_MessageListMenuAction>(
+        value: _MessageListMenuAction.unflagSelected,
+        enabled: enabled,
+        child: const Row(
+          children: [
+            Icon(Icons.star_outline),
+            SizedBox(width: 12),
+            Text('取消星标'),
+          ],
+        ),
+      ),
+      const PopupMenuDivider(),
+      const PopupMenuItem<_MessageListMenuAction>(
+        value: _MessageListMenuAction.clearSelection,
+        child: Row(
+          children: [Icon(Icons.close), SizedBox(width: 12), Text('取消选择')],
+        ),
+      ),
+    ];
   }
 
   Widget _buildAppBarTitle(ThemeData theme) {
@@ -1215,11 +1452,12 @@ class _MessageList extends ConsumerWidget {
     ThemeData theme,
     Widget child, {
     bool refreshable = false,
+    List<Message> visibleMessages = const <Message>[],
   }) {
     final scrollView = CustomScrollView(
       physics: const AlwaysScrollableScrollPhysics(),
       slivers: [
-        _buildSliverAppBar(theme),
+        _buildSliverAppBar(theme, visibleMessages),
         SliverFillRemaining(hasScrollBody: false, child: child),
       ],
     );
@@ -1229,7 +1467,11 @@ class _MessageList extends ConsumerWidget {
     return RefreshIndicator(onRefresh: onRefresh, child: scrollView);
   }
 
-  Widget _buildMessageScrollView(ThemeData theme, List<Widget> slivers) {
+  Widget _buildMessageScrollView(
+    ThemeData theme,
+    List<Message> visibleMessages,
+    List<Widget> slivers,
+  ) {
     final topGap = subtitle == null || subtitle!.isEmpty ? 8.0 : 14.0;
 
     return RefreshIndicator(
@@ -1237,7 +1479,7 @@ class _MessageList extends ConsumerWidget {
       child: CustomScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
         slivers: [
-          _buildSliverAppBar(theme),
+          _buildSliverAppBar(theme, visibleMessages),
           SliverToBoxAdapter(child: SizedBox(height: topGap)),
           ...slivers,
           const SliverToBoxAdapter(child: SizedBox(height: 88)),
@@ -1251,6 +1493,7 @@ class _MessageList extends ConsumerWidget {
     WidgetRef ref,
     ThemeData theme,
     UnifiedMailboxFolder folder,
+    DisplaySettings displaySettings,
   ) {
     final unifiedFolderAsync = ref.watch(
       unifiedFolderMessagesProvider(folder.type),
@@ -1262,7 +1505,7 @@ class _MessageList extends ConsumerWidget {
           return _buildEmptyMessages(theme);
         }
 
-        return _buildMessageListView(messages, theme);
+        return _buildMessageListView(messages, theme, displaySettings);
       },
       loading: () => _buildStatusScrollView(
         theme,
@@ -1276,6 +1519,7 @@ class _MessageList extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
     ThemeData theme,
+    DisplaySettings displaySettings,
   ) {
     final accountMessagesAsync = ref.watch(accountMessagesProvider(accountId!));
 
@@ -1285,7 +1529,7 @@ class _MessageList extends ConsumerWidget {
           return _buildEmptyMessages(theme);
         }
 
-        return _buildAccountMessageListView(messages, theme);
+        return _buildAccountMessageListView(messages, theme, displaySettings);
       },
       loading: () => _buildStatusScrollView(
         theme,
@@ -1299,40 +1543,39 @@ class _MessageList extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
     ThemeData theme,
+    DisplaySettings displaySettings,
   ) {
-    final db = ref.watch(databaseProvider);
-    final messagesStream = db.messageDao.watchFolderMessages(folderId!);
+    // 用 folderMessagesProvider（跨重建缓存）而非内联 StreamBuilder：返回详情页
+    // 时不会重订阅、闪 loading，从而保住列表滚动位置（预见式返回动画才连贯）。
+    final folderMessagesAsync = ref.watch(folderMessagesProvider(folderId!));
 
-    return StreamBuilder<List<Message>>(
-      stream: messagesStream,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return _buildStatusScrollView(
-            theme,
-            const Center(child: CircularProgressIndicator()),
-          );
-        }
-
-        if (snapshot.hasError) {
-          return _buildErrorState(theme, snapshot.error!);
-        }
-
-        final messages = snapshot.data ?? [];
-
+    return folderMessagesAsync.when(
+      data: (messages) {
         if (messages.isEmpty) {
           return _buildEmptyMessages(theme);
         }
 
-        return _buildAccountMessageListView(messages, theme);
+        return _buildAccountMessageListView(messages, theme, displaySettings);
       },
+      loading: () => _buildStatusScrollView(
+        theme,
+        const Center(child: CircularProgressIndicator()),
+      ),
+      error: (error, stack) => _buildErrorState(theme, error),
     );
   }
 
   Widget _buildMessageListView(
     List<MessageWithAccount> messages,
     ThemeData theme,
+    DisplaySettings displaySettings,
   ) {
-    return _buildMessageScrollView(theme, [
+    final visibleMessages = messages
+        .map((item) => item.message)
+        .toList(growable: false);
+    _pruneSelection(visibleMessages);
+
+    return _buildMessageScrollView(theme, visibleMessages, [
       SliverM3ECardList(
         itemCount: messages.length,
         margin: const EdgeInsets.symmetric(horizontal: 12),
@@ -1340,7 +1583,7 @@ class _MessageList extends ConsumerWidget {
         gap: 3,
         outerRadius: 24,
         innerRadius: 4,
-        color: theme.colorScheme.surfaceContainerHighest,
+        color: mailListSurfaceColor(theme),
         splashColor: theme.colorScheme.primary.withValues(alpha: 0.08),
         highlightColor: theme.colorScheme.primary.withValues(alpha: 0.04),
         haptic: M3EHapticFeedback.light,
@@ -1348,15 +1591,14 @@ class _MessageList extends ConsumerWidget {
           final item = messages[index];
           return _messageSemanticLabel(item.message, item.accountEmail);
         },
-        onTap: (index) => onMessageTap(messages[index].message),
-        onLongPress: (index) {
-          final message = messages[index].message;
-          // TODO: 实现长按选择
-          debugPrint('长按选择: ${message.id}');
-        },
+        onTap: (index) => _handleMessageTap(messages[index].message),
+        onLongPress: (index) => _selectMessage(messages[index].message),
         itemBuilder: (context, index) {
           final item = messages[index];
           final message = item.message;
+          // 滚动到（近）可见即后台预取正文（低优先级，仅 Wi‑Fi/非计费网络）。
+          ref.read(bodyPrefetchServiceProvider).enqueueVisible(message.id);
+          final selected = _selectedMessageIds.contains(message.id);
           final accountColor = item.accountColorValue != null
               ? Color(item.accountColorValue!)
               : null;
@@ -1367,6 +1609,8 @@ class _MessageList extends ConsumerWidget {
               accountEmail: item.accountEmail,
               accountColor: accountColor,
               showAccountLabel: true,
+              displaySettings: displaySettings,
+              isSelected: selected,
             );
           }
 
@@ -1374,12 +1618,15 @@ class _MessageList extends ConsumerWidget {
             key: ValueKey(message.id),
             id: message.id,
             borderRadius: _messageCardBorderRadius(index, messages.length),
+            backgroundColor: mailListSurfaceColor(theme),
             previewBuilder: buildPreview,
             child: GmailMobileMessageCardContent(
               message: message,
               accountEmail: item.accountEmail,
               accountColor: accountColor,
               showAccountLabel: true,
+              displaySettings: displaySettings,
+              isSelected: selected,
               onStarTap: () {
                 // TODO: 实现星标切换
                 debugPrint('切换星标: ${message.id}');
@@ -1391,8 +1638,14 @@ class _MessageList extends ConsumerWidget {
     ]);
   }
 
-  Widget _buildAccountMessageListView(List<Message> messages, ThemeData theme) {
-    return _buildMessageScrollView(theme, [
+  Widget _buildAccountMessageListView(
+    List<Message> messages,
+    ThemeData theme,
+    DisplaySettings displaySettings,
+  ) {
+    _pruneSelection(messages);
+
+    return _buildMessageScrollView(theme, messages, [
       SliverM3ECardList(
         itemCount: messages.length,
         margin: const EdgeInsets.symmetric(horizontal: 12),
@@ -1400,26 +1653,27 @@ class _MessageList extends ConsumerWidget {
         gap: 3,
         outerRadius: 24,
         innerRadius: 4,
-        color: theme.colorScheme.surfaceContainerHighest,
+        color: mailListSurfaceColor(theme),
         splashColor: theme.colorScheme.primary.withValues(alpha: 0.08),
         highlightColor: theme.colorScheme.primary.withValues(alpha: 0.04),
         haptic: M3EHapticFeedback.light,
         semanticLabelBuilder: (index) {
           return _messageSemanticLabel(messages[index], null);
         },
-        onTap: (index) => onMessageTap(messages[index]),
-        onLongPress: (index) {
-          final message = messages[index];
-          // TODO: 实现长按选择
-          debugPrint('长按选择: ${message.id}');
-        },
+        onTap: (index) => _handleMessageTap(messages[index]),
+        onLongPress: (index) => _selectMessage(messages[index]),
         itemBuilder: (context, index) {
           final message = messages[index];
+          // 滚动到（近）可见即后台预取正文（低优先级，仅 Wi‑Fi/非计费网络）。
+          ref.read(bodyPrefetchServiceProvider).enqueueVisible(message.id);
+          final selected = _selectedMessageIds.contains(message.id);
 
           Widget buildPreview(BuildContext context) {
             return GmailMobileMessageCardContent(
               message: message,
               showAccountLabel: false,
+              displaySettings: displaySettings,
+              isSelected: selected,
             );
           }
 
@@ -1427,10 +1681,13 @@ class _MessageList extends ConsumerWidget {
             key: ValueKey(message.id),
             id: message.id,
             borderRadius: _messageCardBorderRadius(index, messages.length),
+            backgroundColor: mailListSurfaceColor(theme),
             previewBuilder: buildPreview,
             child: GmailMobileMessageCardContent(
               message: message,
               showAccountLabel: false,
+              displaySettings: displaySettings,
+              isSelected: selected,
               onStarTap: () {
                 // TODO: 实现星标切换
                 debugPrint('切换星标: ${message.id}');
@@ -1440,6 +1697,298 @@ class _MessageList extends ConsumerWidget {
         },
       ),
     ]);
+  }
+
+  void _handleMenuAction(
+    BuildContext context,
+    List<Message> visibleMessages,
+    _MessageListMenuAction action,
+  ) {
+    final selectedMessages = _selectedMessagesFrom(visibleMessages);
+    switch (action) {
+      case _MessageListMenuAction.selectAll:
+        _selectAll(visibleMessages);
+        break;
+      case _MessageListMenuAction.markAllRead:
+        _markAllRead(context, visibleMessages);
+        break;
+      case _MessageListMenuAction.archiveSelected:
+        _moveMessagesToFolderType(
+          context,
+          selectedMessages,
+          FolderType.archive,
+          successLabel: '已归档',
+          failureLabel: '归档失败',
+        );
+        break;
+      case _MessageListMenuAction.flagSelected:
+        _setFlagForMessages(
+          context,
+          selectedMessages,
+          flag: MessageFlag.flagged,
+          value: true,
+          successLabel: '已加星标',
+          failureLabel: '加星标失败',
+        );
+        break;
+      case _MessageListMenuAction.unflagSelected:
+        _setFlagForMessages(
+          context,
+          selectedMessages,
+          flag: MessageFlag.flagged,
+          value: false,
+          successLabel: '已取消星标',
+          failureLabel: '取消星标失败',
+        );
+        break;
+      case _MessageListMenuAction.clearSelection:
+        _clearSelection();
+        break;
+    }
+  }
+
+  void _handleMessageTap(Message message) {
+    if (_selectedMessageIds.isEmpty) {
+      onMessageTap(message);
+      return;
+    }
+    _toggleMessageSelection(message);
+  }
+
+  void _selectMessage(Message message) {
+    if (_selectedMessageIds.contains(message.id)) return;
+    setState(() {
+      _selectedMessageIds.add(message.id);
+    });
+  }
+
+  void _toggleMessageSelection(Message message) {
+    setState(() {
+      if (!_selectedMessageIds.remove(message.id)) {
+        _selectedMessageIds.add(message.id);
+      }
+    });
+  }
+
+  void _selectAll(List<Message> messages) {
+    if (messages.isEmpty) return;
+    setState(() {
+      _selectedMessageIds
+        ..clear()
+        ..addAll(messages.map((message) => message.id));
+    });
+  }
+
+  void _clearSelection() {
+    if (_selectedMessageIds.isEmpty) return;
+    setState(_selectedMessageIds.clear);
+  }
+
+  void _pruneSelection(List<Message> visibleMessages) {
+    if (_selectedMessageIds.isEmpty) return;
+    final visibleIds = visibleMessages.map((message) => message.id).toSet();
+    _selectedMessageIds.removeWhere((id) => !visibleIds.contains(id));
+  }
+
+  List<Message> _selectedMessagesFrom(List<Message> visibleMessages) {
+    if (_selectedMessageIds.isEmpty) return const <Message>[];
+    return visibleMessages
+        .where((message) => _selectedMessageIds.contains(message.id))
+        .toList(growable: false);
+  }
+
+  Future<void> _markAllRead(
+    BuildContext context,
+    List<Message> visibleMessages,
+  ) async {
+    if (_batchInProgress) return;
+
+    final unreadMessages = visibleMessages
+        .where((message) => !_isRead(message))
+        .toList(growable: false);
+    if (unreadMessages.isEmpty) return;
+
+    await _setReadForMessages(context, unreadMessages, read: true);
+  }
+
+  Future<void> _setReadForMessages(
+    BuildContext context,
+    List<Message> messages, {
+    required bool read,
+  }) async {
+    if (_batchInProgress || messages.isEmpty) return;
+
+    setState(() {
+      _batchInProgress = true;
+    });
+
+    final changedMessages = messages
+        .where((message) => _isRead(message) != read)
+        .toList(growable: false);
+    try {
+      final syncService = ref.read(syncServiceProvider);
+      for (final message in changedMessages) {
+        await syncService.setMessageFlag(
+          message.id,
+          flag: MessageFlag.seen,
+          value: read,
+        );
+      }
+
+      if (!context.mounted) return;
+      final actionLabel = read ? '已读' : '未读';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('已将 ${changedMessages.length} 封邮件标为$actionLabel'),
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      final actionLabel = read ? '标为已读' : '标为未读';
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('$actionLabel失败: $e')));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _batchInProgress = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _setFlagForMessages(
+    BuildContext context,
+    List<Message> messages, {
+    required MessageFlag flag,
+    required bool value,
+    required String successLabel,
+    required String failureLabel,
+  }) async {
+    if (_batchInProgress || messages.isEmpty) return;
+
+    setState(() {
+      _batchInProgress = true;
+    });
+
+    try {
+      final syncService = ref.read(syncServiceProvider);
+      for (final message in messages) {
+        await syncService.setMessageFlag(message.id, flag: flag, value: value);
+      }
+
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$successLabel ${messages.length} 封邮件')),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('$failureLabel: $e')));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _batchInProgress = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _moveMessagesToFolderType(
+    BuildContext context,
+    List<Message> messages,
+    FolderType folderType, {
+    required String successLabel,
+    required String failureLabel,
+  }) async {
+    if (_batchInProgress || messages.isEmpty) return;
+
+    setState(() {
+      _batchInProgress = true;
+    });
+
+    try {
+      final syncService = ref.read(syncServiceProvider);
+      for (final message in messages) {
+        await syncService.moveMessageToFolderType(message.id, folderType);
+      }
+
+      if (!context.mounted) return;
+      _clearSelection();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$successLabel ${messages.length} 封邮件')),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('$failureLabel: $e')));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _batchInProgress = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _deleteMessages(
+    BuildContext context,
+    List<Message> messages,
+  ) async {
+    if (_batchInProgress || messages.isEmpty) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除邮件'),
+        content: Text('确定要删除选中的 ${messages.length} 封邮件吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    setState(() {
+      _batchInProgress = true;
+    });
+
+    try {
+      final syncService = ref.read(syncServiceProvider);
+      for (final message in messages) {
+        await syncService.deleteMessage(message.id);
+      }
+
+      if (!context.mounted) return;
+      _clearSelection();
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('已删除 ${messages.length} 封邮件')));
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('删除失败: $e')));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _batchInProgress = false;
+        });
+      }
+    }
+  }
+
+  bool _isRead(Message message) {
+    return (message.flagsBitmask & (1 << MessageFlag.seen.index)) != 0;
   }
 
   String _messageSemanticLabel(Message message, String? accountEmail) {
@@ -1493,6 +2042,8 @@ class _MessageList extends ConsumerWidget {
 
   /// 没邮件时仍然支持下拉刷新：用 always-scrollable physics + 撑满高度的占位。
   Widget _buildEmptyMessages(ThemeData theme) {
+    _pruneSelection(const <Message>[]);
+
     return _buildStatusScrollView(
       theme,
       Center(
