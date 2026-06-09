@@ -131,10 +131,10 @@ class _OAuthPageState extends ConsumerState<OAuthPage> {
 
       debugPrint('账户保存成功！');
 
-      // 5. 导航到同步配置页面
+      // 5. 导航到完善账户信息页面（首次同步前可改名称/颜色/头像）
       if (mounted) {
         context.push(
-          '/onboarding/sync-config?email=${Uri.encodeComponent(resolvedEmail)}&accountId=${Uri.encodeComponent(accountId)}',
+          '/onboarding/profile?email=${Uri.encodeComponent(resolvedEmail)}&accountId=${Uri.encodeComponent(accountId)}',
         );
       }
     } catch (e, stackTrace) {

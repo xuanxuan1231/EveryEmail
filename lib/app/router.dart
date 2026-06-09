@@ -11,6 +11,7 @@ import '../features/onboarding/add_account_page.dart';
 import '../features/onboarding/manual_setup_page.dart';
 import '../features/onboarding/oauth_page.dart';
 import '../features/onboarding/password_page.dart';
+import '../features/onboarding/profile_setup_page.dart';
 import '../features/onboarding/sync_config_page.dart';
 
 /// 应用路由表。
@@ -93,6 +94,14 @@ final GoRouter appRouter = GoRouter(
         final email = state.uri.queryParameters['email'] ?? '';
         final accountId = state.uri.queryParameters['accountId'] ?? '';
         return SyncConfigPage(email: email, accountId: accountId);
+      },
+    ),
+    GoRoute(
+      path: '/onboarding/profile',
+      builder: (context, state) {
+        final email = state.uri.queryParameters['email'] ?? '';
+        final accountId = state.uri.queryParameters['accountId'] ?? '';
+        return AccountProfileSetupPage(email: email, accountId: accountId);
       },
     ),
     GoRoute(

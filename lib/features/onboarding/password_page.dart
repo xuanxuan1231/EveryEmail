@@ -92,10 +92,7 @@ class _PasswordPageState extends ConsumerState<PasswordPage> {
       );
 
       // 2. 测试 IMAP 连接
-      final backend = ImapMailBackend(
-        account: testAccount,
-        password: password,
-      );
+      final backend = ImapMailBackend(account: testAccount, password: password);
 
       await backend.connect();
       await backend.disconnect();
@@ -126,9 +123,11 @@ class _PasswordPageState extends ConsumerState<PasswordPage> {
         ),
       );
 
-      // 6. 导航到同步配置页面
+      // 6. 导航到完善账户信息页面（首次同步前可改名称/颜色/头像）
       if (mounted) {
-        context.push('/onboarding/sync-config?email=${Uri.encodeComponent(widget.email)}&accountId=${Uri.encodeComponent(accountId)}');
+        context.push(
+          '/onboarding/profile?email=${Uri.encodeComponent(widget.email)}&accountId=${Uri.encodeComponent(accountId)}',
+        );
       }
     } catch (e) {
       setState(() {
@@ -157,19 +156,14 @@ class _PasswordPageState extends ConsumerState<PasswordPage> {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('输入密码'),
-      ),
+      appBar: AppBar(title: const Text('输入密码')),
       body: Form(
         key: _formKey,
         child: ListView(
           padding: const EdgeInsets.all(24.0),
           children: [
             // 邮箱地址
-            Text(
-              widget.email,
-              style: theme.textTheme.headlineSmall,
-            ),
+            Text(widget.email, style: theme.textTheme.headlineSmall),
             const SizedBox(height: 8),
             Text(
               '已自动配置服务器设置',
@@ -186,10 +180,7 @@ class _PasswordPageState extends ConsumerState<PasswordPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      '服务器配置',
-                      style: theme.textTheme.titleMedium,
-                    ),
+                    Text('服务器配置', style: theme.textTheme.titleMedium),
                     const SizedBox(height: 16),
                     _buildServerInfo('IMAP', widget.imap),
                     if (widget.smtp != null) ...[
@@ -320,10 +311,7 @@ class _PasswordPageState extends ConsumerState<PasswordPage> {
                 ),
                 child: Row(
                   children: [
-                    Icon(
-                      Icons.error_outline,
-                      color: theme.colorScheme.error,
-                    ),
+                    Icon(Icons.error_outline, color: theme.colorScheme.error),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(
@@ -359,7 +347,9 @@ class _PasswordPageState extends ConsumerState<PasswordPage> {
               onPressed: _isTesting
                   ? null
                   : () {
-                      context.push('/onboarding/manual?email=${Uri.encodeComponent(widget.email)}');
+                      context.push(
+                        '/onboarding/manual?email=${Uri.encodeComponent(widget.email)}',
+                      );
                     },
               child: const Text('修改服务器设置'),
             ),
@@ -374,8 +364,8 @@ class _PasswordPageState extends ConsumerState<PasswordPage> {
     final socketTypeLabel = config.socketType == SocketType.ssl
         ? 'SSL/TLS'
         : config.socketType == SocketType.starttls
-            ? 'STARTTLS'
-            : '明文';
+        ? 'STARTTLS'
+        : '明文';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -409,12 +399,7 @@ class _PasswordPageState extends ConsumerState<PasswordPage> {
               ),
             ),
           ),
-          Expanded(
-            child: Text(
-              value,
-              style: theme.textTheme.bodyMedium,
-            ),
-          ),
+          Expanded(child: Text(value, style: theme.textTheme.bodyMedium)),
         ],
       ),
     );
