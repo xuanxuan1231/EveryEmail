@@ -56,16 +56,26 @@ void main() {
       expect(a, b);
     });
 
+    test('GmailRef 相等性（不含 threadId）', () {
+      const a = GmailRef(messageId: 'x', labelId: 'INBOX');
+      const b = GmailRef(messageId: 'x', labelId: 'INBOX', threadId: 't1');
+      const c = GmailRef(messageId: 'y', labelId: 'INBOX');
+      expect(a, b);
+      expect(a == c, isFalse);
+    });
+
     test('sealed switch 穷尽', () {
       String describe(MessageRef ref) => switch (ref) {
             ImapRef() => 'imap',
             GraphRef() => 'graph',
+            GmailRef() => 'gmail',
           };
       expect(
         describe(const ImapRef(folderPath: 'INBOX', uid: 1, uidValidity: 1)),
         'imap',
       );
       expect(describe(const GraphRef(messageId: 'x', folderId: 'y')), 'graph');
+      expect(describe(const GmailRef(messageId: 'x', labelId: 'INBOX')), 'gmail');
     });
   });
 }
