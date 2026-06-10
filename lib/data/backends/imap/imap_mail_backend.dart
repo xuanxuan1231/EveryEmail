@@ -121,9 +121,38 @@ class ImapMailBackend implements MailBackend {
     try {
       await _client!.connect();
       _connectedAt = DateTime.now();
+      await _sendImapId();
     } on em.MailException catch (e) {
       _client = null;
       throw MailAuthException('IMAP 连接失败: ${e.message}', cause: e);
+    }
+  }
+
+  /// 登录后向服务器发送 RFC 2971 ID 命令。
+  ///
+  /// 网易系（163/126/yeah）的反代收策略要求客户端登录后必须发 ID，否则后续 SELECT
+  /// 被拒：「Unsafe Login. Please contact kefu@188.com for help」。网易系强制发送；
+  /// 其余服务器仅在声明 ID 能力（[em.ImapServerInfo.supportsId]）时发送。ID 命令为
+  /// 可选扩展，失败不致命——吞掉异常，后续 SELECT 由服务器裁定。
+  Future<void> _sendImapId() async {
+    final client = _client;
+    if (client == null) return;
+    final incoming = client.lowLevelIncomingMailClient;
+    if (incoming is! em.ImapClient) return; // 仅 IMAP（非 POP）
+
+    final host = account.imap?.host.toLowerCase() ?? '';
+    final isNetease = host.contains('163.com') ||
+        host.contains('126.com') ||
+        host.contains('yeah.net') ||
+        host.contains('netease');
+    if (!isNetease && !incoming.serverInfo.supportsId) return;
+
+    try {
+      await incoming.id(
+        clientId: const em.Id(name: 'EveryEmail', version: '1.0'),
+      );
+    } catch (_) {
+      // ID 失败不致命：不支持的服务器 / 网络抖动时忽略。
     }
   }
 

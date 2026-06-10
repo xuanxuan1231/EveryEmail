@@ -29,7 +29,7 @@ class AccountRepository {
   }) : _db = db,
        _tokenStore = tokenStore,
        _oauth = oauthService,
-       _discovery = discovery ?? const DiscoveryService(),
+       _discovery = discovery ?? DiscoveryService(),
        _webhookManager = webhookManager,
        _gmailWatchManager = gmailWatchManager;
 

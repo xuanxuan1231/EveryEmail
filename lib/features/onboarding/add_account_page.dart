@@ -96,6 +96,8 @@ class _AddAccountPageState extends ConsumerState<AddAccountPage> {
                   'smtpPort': smtp.port.toString(),
                   'smtpSocketType': smtp.socketType.name,
                 },
+                if (result.suggestedLoginName != null)
+                  'loginName': result.suggestedLoginName!,
               };
 
               final uri = Uri(

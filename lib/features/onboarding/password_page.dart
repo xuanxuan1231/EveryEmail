@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../app/providers.dart';
 import '../../core/utils/id_generator.dart';
+import '../../data/autoconfig/local_provider_presets.dart';
 import '../../data/backends/imap/imap_mail_backend.dart';
 import '../../data/local/database/app_database.dart';
 import '../../domain/enums/account_enums.dart';
@@ -23,12 +24,16 @@ class PasswordPage extends ConsumerStatefulWidget {
     required this.email,
     required this.imap,
     this.smtp,
+    this.loginName,
     super.key,
   });
 
   final String email;
   final ServerConfig imap;
   final ServerConfig? smtp;
+
+  /// 自动发现推导出的建议登录名（如 local-part）；为空则默认用邮箱地址。
+  final String? loginName;
 
   @override
   ConsumerState<PasswordPage> createState() => _PasswordPageState();
@@ -37,6 +42,8 @@ class PasswordPage extends ConsumerStatefulWidget {
 class _PasswordPageState extends ConsumerState<PasswordPage> {
   final _formKey = GlobalKey<FormState>();
   final _passwordController = TextEditingController();
+  late final TextEditingController _loginNameController =
+      TextEditingController(text: widget.loginName ?? widget.email);
   bool _obscurePassword = true;
   bool _isTesting = false;
   String? _errorMessage;
@@ -52,9 +59,13 @@ class _PasswordPageState extends ConsumerState<PasswordPage> {
         smtpHost.contains('smtp-mail.outlook.com');
   }
 
+  /// 国内邮箱本地预设的登录引导（授权码 / 客户端专用密码等），无则为 null。
+  String? get _loginHint => ProviderPresets.lookup(widget.email)?.loginHint;
+
   @override
   void dispose() {
     _passwordController.dispose();
+    _loginNameController.dispose();
     super.dispose();
   }
 
@@ -89,6 +100,7 @@ class _PasswordPageState extends ConsumerState<PasswordPage> {
         imap: widget.imap,
         smtp: widget.smtp,
         secretRef: null,
+        loginName: _loginNameController.text.trim(),
       );
 
       // 2. 测试 IMAP 连接
@@ -119,6 +131,7 @@ class _PasswordPageState extends ConsumerState<PasswordPage> {
           smtpHost: Value(widget.smtp?.host),
           smtpPort: Value(widget.smtp?.port),
           smtpSocketType: Value(widget.smtp?.socketType),
+          loginName: Value(_loginNameController.text.trim()),
           colorValue: Value(_generateAccountColor()),
         ),
       );
@@ -193,6 +206,35 @@ class _PasswordPageState extends ConsumerState<PasswordPage> {
             ),
             const SizedBox(height: 24),
 
+            // 授权码 / 客户端专用密码提示（国内邮箱本地预设命中时）
+            if (_loginHint != null) ...[
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primaryContainer,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.info_outline,
+                      color: theme.colorScheme.onPrimaryContainer,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        _loginHint!,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onPrimaryContainer,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+            ],
+
             // Office 365 检测提示
             if (_isOffice365) ...[
               Container(
@@ -263,6 +305,25 @@ class _PasswordPageState extends ConsumerState<PasswordPage> {
               ),
               const SizedBox(height: 16),
             ],
+
+            // 登录名（IMAP 用户名；默认等于邮箱，部分邮箱要求 @ 前的本地部分，可改）
+            TextFormField(
+              controller: _loginNameController,
+              decoration: const InputDecoration(
+                labelText: '登录名',
+                hintText: '通常为完整邮箱地址',
+                prefixIcon: Icon(Icons.person_outline),
+                border: OutlineInputBorder(),
+              ),
+              validator: (value) {
+                if (value == null || value.trim().isEmpty) {
+                  return '请输入登录名';
+                }
+                return null;
+              },
+              enabled: !_isTesting,
+            ),
+            const SizedBox(height: 16),
 
             // 密码输入
             TextFormField(

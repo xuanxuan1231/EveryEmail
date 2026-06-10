@@ -133,6 +133,7 @@ final GoRouter appRouter = GoRouter(
             int.tryParse(state.uri.queryParameters['smtpPort'] ?? '') ?? 465;
         final smtpSocketType =
             state.uri.queryParameters['smtpSocketType'] ?? 'ssl';
+        final loginName = state.uri.queryParameters['loginName'];
 
         return PasswordPage(
           email: email,
@@ -148,6 +149,7 @@ final GoRouter appRouter = GoRouter(
                   socketType: _parseSocketType(smtpSocketType),
                 )
               : null,
+          loginName: loginName,
         );
       },
     ),

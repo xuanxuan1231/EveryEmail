@@ -28,6 +28,10 @@ class ManualSetupPage extends ConsumerStatefulWidget {
 class _ManualSetupPageState extends ConsumerState<ManualSetupPage> {
   final _formKey = GlobalKey<FormState>();
 
+  // 登录名（IMAP 用户名，默认等于邮箱）
+  late final TextEditingController _loginNameController =
+      TextEditingController(text: widget.email);
+
   // IMAP 配置
   final _imapHostController = TextEditingController();
   final _imapPortController = TextEditingController(text: '993');
@@ -48,6 +52,7 @@ class _ManualSetupPageState extends ConsumerState<ManualSetupPage> {
 
   @override
   void dispose() {
+    _loginNameController.dispose();
     _imapHostController.dispose();
     _imapPortController.dispose();
     _imapPasswordController.dispose();
@@ -90,6 +95,7 @@ class _ManualSetupPageState extends ConsumerState<ManualSetupPage> {
           socketType: _smtpSocketType,
         ),
         secretRef: null,
+        loginName: _loginNameController.text.trim(),
       );
 
       // 2. 测试 IMAP 连接
@@ -127,6 +133,7 @@ class _ManualSetupPageState extends ConsumerState<ManualSetupPage> {
           smtpHost: Value(_smtpHostController.text.trim()),
           smtpPort: Value(int.parse(_smtpPortController.text)),
           smtpSocketType: Value(_smtpSocketType),
+          loginName: Value(_loginNameController.text.trim()),
           colorValue: Value(_generateAccountColor()),
         ),
       );
@@ -363,8 +370,26 @@ class _ManualSetupPageState extends ConsumerState<ManualSetupPage> {
 
             // 密码配置
             Text(
-              '密码',
+              '登录凭据',
               style: theme.textTheme.titleMedium,
+            ),
+            const SizedBox(height: 16),
+
+            TextFormField(
+              controller: _loginNameController,
+              decoration: const InputDecoration(
+                labelText: '登录名',
+                hintText: '通常为完整邮箱地址',
+                prefixIcon: Icon(Icons.person_outline),
+                border: OutlineInputBorder(),
+              ),
+              validator: (value) {
+                if (value == null || value.trim().isEmpty) {
+                  return '请输入登录名';
+                }
+                return null;
+              },
+              enabled: !_isTesting,
             ),
             const SizedBox(height: 16),
 
