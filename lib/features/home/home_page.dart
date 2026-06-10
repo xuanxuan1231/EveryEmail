@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -10,8 +12,10 @@ import '../../core/theme/theme_ext.dart';
 import '../../data/local/database/app_database.dart';
 import '../../data/local/database/message_with_account.dart';
 import '../../data/settings/display_settings.dart';
+import '../../data/sync/sync_service.dart';
 import '../../domain/enums/message_enums.dart';
 import '../../domain/models/account_config.dart';
+import '../../domain/models/conversation_summary.dart';
 import '../../domain/models/unified_mailbox.dart';
 import 'widgets/gmail_mobile_message_item.dart';
 
@@ -72,6 +76,10 @@ class _HomePageState extends ConsumerState<HomePage> {
   String? _drawerAccountId = UnifiedMailbox.account.id;
   final ValueNotifier<bool> _isAccountSwitcherOpen = ValueNotifier(false);
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+
+  /// 本会话内已触发过按需同步的文件夹 id，避免每次点开都重复全量拉取
+  /// （下拉刷新仍可手动重新同步）。
+  final Set<String> _onDemandSyncedFolders = <String>{};
 
   UnifiedMailboxFolder? get _selectedUnifiedFolder {
     if (!UnifiedMailbox.isUnifiedAccountId(_selectedAccountId)) return null;
@@ -195,6 +203,12 @@ class _HomePageState extends ConsumerState<HomePage> {
             for (final account in accounts) {
               if (account.id == _selectedAccountId) {
                 await _syncAccount(syncService, account);
+                // 选中具体文件夹时，额外强制同步该文件夹——账户级同步会跳过
+                // 被范围门控挡住的垃圾邮件/废纸篓，这里补上以保证下拉能刷出。
+                final folderId = _selectedFolderId;
+                if (folderId != null) {
+                  await _syncSelectedFolder(syncService, account, folderId);
+                }
                 break;
               }
             }
@@ -877,6 +891,12 @@ class _HomePageState extends ConsumerState<HomePage> {
               _selectedFolderId = folder.id;
               _selectedFolderName = folder.displayName;
             });
+            // 首次打开该文件夹时按需同步一次：默认不自动同步的垃圾邮件/废纸篓
+            // 点开即开始拉取，无需等用户下拉刷新。
+            if (_onDemandSyncedFolders.add(folder.id)) {
+              final syncService = ref.read(syncServiceProvider);
+              unawaited(_syncSelectedFolder(syncService, account, folder.id));
+            }
             Navigator.pop(context);
           },
           itemBuilder: (context, index) {
@@ -1107,39 +1127,60 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   Future<void> _syncAccount(dynamic syncService, Account account) async {
     try {
-      final accountConfig = AccountConfig(
-        id: account.id,
-        email: account.email,
-        displayName: account.displayName,
-        type: account.accountType,
-        authType: account.authType,
-        secretRef: account.secretRef,
-        imap: account.imapHost != null
-            ? ServerConfig(
-                host: account.imapHost!,
-                port: account.imapPort!,
-                socketType: account.imapSocketType!,
-              )
-            : null,
-        smtp: account.smtpHost != null
-            ? ServerConfig(
-                host: account.smtpHost!,
-                port: account.smtpPort!,
-                socketType: account.smtpSocketType!,
-              )
-            : null,
-        colorValue: account.colorValue,
-      );
-      await syncService.syncAccount(accountConfig);
+      await syncService.syncAccount(_accountConfigOf(account));
     } catch (e) {
       debugPrint('同步账户失败: $e');
     }
+  }
+
+  /// 按需同步选中的具体文件夹：绕过自动同步范围门控，让默认不同步的
+  /// 垃圾邮件/废纸篓在用户主动打开/刷新时也能拉到内容。fire-and-forget。
+  Future<void> _syncSelectedFolder(
+    dynamic syncService,
+    Account account,
+    String folderId,
+  ) async {
+    try {
+      final db = ref.read(databaseProvider);
+      final folder = await db.folderDao.getFolder(folderId);
+      if (folder == null) return;
+      await syncService.syncSingleFolder(_accountConfigOf(account), folder);
+    } catch (e) {
+      debugPrint('按需同步文件夹失败: $e');
+    }
+  }
+
+  AccountConfig _accountConfigOf(Account account) {
+    return AccountConfig(
+      id: account.id,
+      email: account.email,
+      displayName: account.displayName,
+      type: account.accountType,
+      authType: account.authType,
+      secretRef: account.secretRef,
+      imap: account.imapHost != null
+          ? ServerConfig(
+              host: account.imapHost!,
+              port: account.imapPort!,
+              socketType: account.imapSocketType!,
+            )
+          : null,
+      smtp: account.smtpHost != null
+          ? ServerConfig(
+              host: account.smtpHost!,
+              port: account.smtpPort!,
+              socketType: account.smtpSocketType!,
+            )
+          : null,
+      colorValue: account.colorValue,
+    );
   }
 }
 
 enum _MessageListMenuAction {
   selectAll,
   markAllRead,
+  repairFolder,
   archiveSelected,
   flagSelected,
   unflagSelected,
@@ -1183,6 +1224,9 @@ class _MessageListState extends ConsumerState<_MessageList> {
   final Set<String> _selectedMessageIds = <String>{};
   bool _batchInProgress = false;
 
+  /// 正在向更旧翻页（“加载更多”）的去重标志，避免滚动连发多次回填。
+  bool _loadingMore = false;
+
   String get title => widget.title;
   String? get subtitle => widget.subtitle;
   UnifiedMailboxFolder? get unifiedFolder => widget.unifiedFolder;
@@ -1209,6 +1253,12 @@ class _MessageListState extends ConsumerState<_MessageList> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final displaySettings = ref.watch(displaySettingsProvider);
+    // 会话视图把收件人里的自己显示为「我」、并按账户隔离会话归并。
+    final accounts =
+        ref.watch(accountsStreamProvider).value ?? const <Account>[];
+    final selfEmails = <String>{
+      for (final account in accounts) account.email.trim().toLowerCase(),
+    };
     late final Widget content;
 
     // 统一账户下的聚合文件夹
@@ -1219,15 +1269,28 @@ class _MessageListState extends ConsumerState<_MessageList> {
         theme,
         unifiedFolder!,
         displaySettings,
+        selfEmails,
       );
     }
     // 单个真实账户的邮件聚合视图
     else if (accountId != null && folderId == null) {
-      content = _buildAccountInbox(context, ref, theme, displaySettings);
+      content = _buildAccountInbox(
+        context,
+        ref,
+        theme,
+        displaySettings,
+        selfEmails,
+      );
     }
     // 特定文件夹
     else if (folderId != null) {
-      content = _buildFolderView(context, ref, theme, displaySettings);
+      content = _buildFolderView(
+        context,
+        ref,
+        theme,
+        displaySettings,
+        selfEmails,
+      );
     } else {
       content = _buildStatusScrollView(
         theme,
@@ -1353,6 +1416,18 @@ class _MessageListState extends ConsumerState<_MessageList> {
           ],
         ),
       ),
+      // 仅具体文件夹视图可「重新同步」：清游标全量重建，补回历史空洞。
+      if (folderId != null)
+        const PopupMenuItem<_MessageListMenuAction>(
+          value: _MessageListMenuAction.repairFolder,
+          child: Row(
+            children: [
+              Icon(Icons.sync_problem_outlined),
+              SizedBox(width: 12),
+              Text('重新同步此文件夹'),
+            ],
+          ),
+        ),
     ];
   }
 
@@ -1470,22 +1545,37 @@ class _MessageListState extends ConsumerState<_MessageList> {
   Widget _buildMessageScrollView(
     ThemeData theme,
     List<Message> visibleMessages,
-    List<Widget> slivers,
-  ) {
+    List<Widget> slivers, {
+    VoidCallback? onNearBottom,
+  }) {
     final topGap = subtitle == null || subtitle!.isEmpty ? 8.0 : 14.0;
 
-    return RefreshIndicator(
-      onRefresh: onRefresh,
-      child: CustomScrollView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        slivers: [
-          _buildSliverAppBar(theme, visibleMessages),
-          SliverToBoxAdapter(child: SizedBox(height: topGap)),
-          ...slivers,
-          const SliverToBoxAdapter(child: SizedBox(height: 88)),
-        ],
-      ),
+    final scrollView = CustomScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      slivers: [
+        _buildSliverAppBar(theme, visibleMessages),
+        SliverToBoxAdapter(child: SizedBox(height: topGap)),
+        ...slivers,
+        const SliverToBoxAdapter(child: SizedBox(height: 88)),
+      ],
     );
+
+    final body = onNearBottom == null
+        ? scrollView
+        : NotificationListener<ScrollNotification>(
+            onNotification: (notification) {
+              final m = notification.metrics;
+              // 接近底部（剩 600px 内）即触发加载更多。
+              if (m.axis == Axis.vertical &&
+                  m.pixels >= m.maxScrollExtent - 600) {
+                onNearBottom();
+              }
+              return false;
+            },
+            child: scrollView,
+          );
+
+    return RefreshIndicator(onRefresh: onRefresh, child: body);
   }
 
   Widget _buildUnifiedFolder(
@@ -1494,6 +1584,7 @@ class _MessageListState extends ConsumerState<_MessageList> {
     ThemeData theme,
     UnifiedMailboxFolder folder,
     DisplaySettings displaySettings,
+    Set<String> selfEmails,
   ) {
     final unifiedFolderAsync = ref.watch(
       unifiedFolderMessagesProvider(folder.type),
@@ -1505,6 +1596,14 @@ class _MessageListState extends ConsumerState<_MessageList> {
           return _buildEmptyMessages(theme);
         }
 
+        if (displaySettings.conversationView) {
+          return _buildConversationListView(
+            groupConversationsWithAccount(messages, selfEmails: selfEmails),
+            theme,
+            displaySettings,
+            showAccountLabel: true,
+          );
+        }
         return _buildMessageListView(messages, theme, displaySettings);
       },
       loading: () => _buildStatusScrollView(
@@ -1520,6 +1619,7 @@ class _MessageListState extends ConsumerState<_MessageList> {
     WidgetRef ref,
     ThemeData theme,
     DisplaySettings displaySettings,
+    Set<String> selfEmails,
   ) {
     final accountMessagesAsync = ref.watch(accountMessagesProvider(accountId!));
 
@@ -1529,6 +1629,14 @@ class _MessageListState extends ConsumerState<_MessageList> {
           return _buildEmptyMessages(theme);
         }
 
+        if (displaySettings.conversationView) {
+          return _buildConversationListView(
+            groupConversations(messages, selfEmails: selfEmails),
+            theme,
+            displaySettings,
+            showAccountLabel: false,
+          );
+        }
         return _buildAccountMessageListView(messages, theme, displaySettings);
       },
       loading: () => _buildStatusScrollView(
@@ -1544,18 +1652,35 @@ class _MessageListState extends ConsumerState<_MessageList> {
     WidgetRef ref,
     ThemeData theme,
     DisplaySettings displaySettings,
+    Set<String> selfEmails,
   ) {
     // 用 folderMessagesProvider（跨重建缓存）而非内联 StreamBuilder：返回详情页
     // 时不会重订阅、闪 loading，从而保住列表滚动位置（预见式返回动画才连贯）。
     final folderMessagesAsync = ref.watch(folderMessagesProvider(folderId!));
 
     return folderMessagesAsync.when(
+      // limit 增长会重订阅流，用 skipLoadingOnReload 保住已有列表、不闪 loading。
+      skipLoadingOnReload: true,
       data: (messages) {
         if (messages.isEmpty) {
           return _buildEmptyMessages(theme);
         }
 
-        return _buildAccountMessageListView(messages, theme, displaySettings);
+        if (displaySettings.conversationView) {
+          return _buildConversationListView(
+            groupConversations(messages, selfEmails: selfEmails),
+            theme,
+            displaySettings,
+            showAccountLabel: false,
+            onNearBottom: _maybeLoadMoreFolder,
+          );
+        }
+        return _buildAccountMessageListView(
+          messages,
+          theme,
+          displaySettings,
+          onNearBottom: _maybeLoadMoreFolder,
+        );
       },
       loading: () => _buildStatusScrollView(
         theme,
@@ -1641,8 +1766,9 @@ class _MessageListState extends ConsumerState<_MessageList> {
   Widget _buildAccountMessageListView(
     List<Message> messages,
     ThemeData theme,
-    DisplaySettings displaySettings,
-  ) {
+    DisplaySettings displaySettings, {
+    VoidCallback? onNearBottom,
+  }) {
     _pruneSelection(messages);
 
     return _buildMessageScrollView(theme, messages, [
@@ -1696,7 +1822,165 @@ class _MessageListState extends ConsumerState<_MessageList> {
           );
         },
       ),
-    ]);
+    ], onNearBottom: onNearBottom);
+  }
+
+  /// 会话视图列表：把已分组的会话渲染成行（参与者 + 计数 + 最新预览）。
+  /// 单封会话外观与逐封模式一致。`visibleMessages` 取所有会话的成员邮件，
+  /// 让多选/批量操作与已读判定仍以 message 为单位工作。
+  Widget _buildConversationListView(
+    List<ConversationSummary> conversations,
+    ThemeData theme,
+    DisplaySettings displaySettings, {
+    required bool showAccountLabel,
+    VoidCallback? onNearBottom,
+  }) {
+    final visibleMessages = conversations
+        .expand((c) => c.messages)
+        .toList(growable: false);
+    _pruneSelection(visibleMessages);
+
+    return _buildMessageScrollView(theme, visibleMessages, [
+      SliverM3ECardList(
+        itemCount: conversations.length,
+        margin: const EdgeInsets.symmetric(horizontal: 12),
+        padding: EdgeInsets.zero,
+        gap: 3,
+        outerRadius: 24,
+        innerRadius: 4,
+        color: mailListSurfaceColor(theme),
+        splashColor: theme.colorScheme.primary.withValues(alpha: 0.08),
+        highlightColor: theme.colorScheme.primary.withValues(alpha: 0.04),
+        haptic: M3EHapticFeedback.light,
+        semanticLabelBuilder: (index) =>
+            _conversationSemanticLabel(conversations[index]),
+        onTap: (index) => _handleConversationTap(conversations[index]),
+        onLongPress: (index) => _selectConversation(conversations[index]),
+        itemBuilder: (context, index) {
+          final conversation = conversations[index];
+          final latest = conversation.latest;
+          // 滚动到（近）可见即后台预取代表邮件正文（点开即见内容）。
+          ref.read(bodyPrefetchServiceProvider).enqueueVisible(latest.id);
+          final selected = _isConversationSelected(conversation);
+          final accountColor = conversation.accountColorValue != null
+              ? Color(conversation.accountColorValue!)
+              : null;
+          final participants = _conversationParticipantsLabel(conversation);
+
+          Widget buildPreview(BuildContext context) {
+            return GmailMobileMessageCardContent(
+              message: latest,
+              accountEmail: showAccountLabel ? conversation.accountEmail : null,
+              accountColor: accountColor,
+              showAccountLabel: showAccountLabel,
+              displaySettings: displaySettings,
+              isSelected: selected,
+              conversationCount: conversation.messageCount,
+              participantsLabel: participants,
+            );
+          }
+
+          return PredictiveBackSharedElementTarget(
+            key: ValueKey(latest.id),
+            id: latest.id,
+            borderRadius: _messageCardBorderRadius(index, conversations.length),
+            backgroundColor: mailListSurfaceColor(theme),
+            previewBuilder: buildPreview,
+            child: GmailMobileMessageCardContent(
+              message: latest,
+              accountEmail: showAccountLabel ? conversation.accountEmail : null,
+              accountColor: accountColor,
+              showAccountLabel: showAccountLabel,
+              displaySettings: displaySettings,
+              isSelected: selected,
+              conversationCount: conversation.messageCount,
+              participantsLabel: participants,
+              onStarTap: () {
+                // TODO: 实现星标切换
+                debugPrint('切换星标: ${latest.id}');
+              },
+            ),
+          );
+        },
+      ),
+    ], onNearBottom: onNearBottom);
+  }
+
+  /// 会话是否被选中：以代表邮件 id 为标记（选择时整条会话成员一起进出选择集）。
+  bool _isConversationSelected(ConversationSummary conversation) {
+    return _selectedMessageIds.contains(conversation.latest.id);
+  }
+
+  void _selectConversation(ConversationSummary conversation) {
+    if (_isConversationSelected(conversation)) return;
+    setState(() {
+      _selectedMessageIds.addAll(conversation.messages.map((m) => m.id));
+    });
+  }
+
+  void _toggleConversationSelection(ConversationSummary conversation) {
+    setState(() {
+      final ids = conversation.messages.map((m) => m.id);
+      if (_isConversationSelected(conversation)) {
+        _selectedMessageIds.removeAll(ids);
+      } else {
+        _selectedMessageIds.addAll(ids);
+      }
+    });
+  }
+
+  void _handleConversationTap(ConversationSummary conversation) {
+    if (_selectedMessageIds.isEmpty) {
+      onMessageTap(conversation.latest);
+      return;
+    }
+    _toggleConversationSelection(conversation);
+  }
+
+  /// 参与者摘要：超过 3 人折叠为「等 N 人」（自己已在分组阶段显示为「我」）。
+  String _conversationParticipantsLabel(ConversationSummary conversation) {
+    final names = conversation.participants;
+    if (names.isEmpty) return '未知发件人';
+    const maxCount = 3;
+    if (names.length <= maxCount) return names.join('、');
+    return '${names.take(maxCount).join('、')} 等 ${names.length} 人';
+  }
+
+  String _conversationSemanticLabel(ConversationSummary conversation) {
+    final who = _conversationParticipantsLabel(conversation);
+    final subject = conversation.latest.subject.isEmpty
+        ? '无主题'
+        : conversation.latest.subject;
+    final count = conversation.messageCount > 1
+        ? '，共 ${conversation.messageCount} 封'
+        : '';
+    return '$who，$subject$count';
+  }
+
+  /// 滚动接近底部时回填更旧邮件：先放开本地显示上限让已落库的更旧邮件立即可见，
+  /// 再向后端翻一页历史并落库。用 [_loadingMore] 去重，避免连发。仅文件夹视图启用。
+  Future<void> _maybeLoadMoreFolder() async {
+    if (_loadingMore) return;
+    final fid = folderId;
+    final aid = accountId;
+    if (fid == null || aid == null) return;
+    _loadingMore = true;
+    try {
+      final syncService = ref.read(syncServiceProvider);
+      final limitNotifier = ref.read(folderDisplayLimitProvider(fid).notifier);
+      limitNotifier.state = limitNotifier.state + 50;
+
+      final account = await syncService.accountConfigFor(aid);
+      final db = ref.read(databaseProvider);
+      final folder = await db.folderDao.getFolder(fid);
+      if (folder != null) {
+        await syncService.loadMoreFolder(account, folder);
+      }
+    } catch (e) {
+      debugPrint('加载更多失败: $e');
+    } finally {
+      _loadingMore = false;
+    }
   }
 
   void _handleMenuAction(
@@ -1711,6 +1995,9 @@ class _MessageListState extends ConsumerState<_MessageList> {
         break;
       case _MessageListMenuAction.markAllRead:
         _markAllRead(context, visibleMessages);
+        break;
+      case _MessageListMenuAction.repairFolder:
+        _repairFolder(context);
         break;
       case _MessageListMenuAction.archiveSelected:
         _moveMessagesToFolderType(
@@ -1744,6 +2031,48 @@ class _MessageListState extends ConsumerState<_MessageList> {
       case _MessageListMenuAction.clearSelection:
         _clearSelection();
         break;
+    }
+  }
+
+  /// 重新同步此文件夹（清空同步游标 → 全量重建），用于补回历史「空洞」。
+  Future<void> _repairFolder(BuildContext context) async {
+    if (_batchInProgress) return;
+    final fid = folderId;
+    final aid = accountId;
+    if (fid == null || aid == null) return;
+
+    setState(() {
+      _batchInProgress = true;
+    });
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('正在重新同步此文件夹…')));
+
+    try {
+      final syncService = ref.read(syncServiceProvider);
+      final account = await syncService.accountConfigFor(aid);
+      final db = ref.read(databaseProvider);
+      final folder = await db.folderDao.getFolder(fid);
+      if (folder != null) {
+        // 重置显示上限与回填进度，让全量结果从头呈现。
+        ref.read(folderDisplayLimitProvider(fid).notifier).state = 100;
+        await syncService.repairFolder(account, folder);
+      }
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('已重新同步此文件夹')));
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('重新同步失败: $e')));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _batchInProgress = false;
+        });
+      }
     }
   }
 
@@ -1834,6 +2163,8 @@ class _MessageListState extends ConsumerState<_MessageList> {
           value: read,
         );
       }
+      // 立即推送，否则只入队、要等下一次周期同步才回推服务端。
+      await _flushAccountsFor(syncService, changedMessages);
 
       if (!context.mounted) return;
       final actionLabel = read ? '已读' : '未读';
@@ -1876,6 +2207,8 @@ class _MessageListState extends ConsumerState<_MessageList> {
       for (final message in messages) {
         await syncService.setMessageFlag(message.id, flag: flag, value: value);
       }
+      // 立即推送，否则只入队、要等下一次周期同步才回推服务端。
+      await _flushAccountsFor(syncService, messages);
 
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1891,6 +2224,22 @@ class _MessageListState extends ConsumerState<_MessageList> {
         setState(() {
           _batchInProgress = false;
         });
+      }
+    }
+  }
+
+  /// 把这批邮件涉及的各账户的 outbox 立即刷到服务端（按账户去重，每个只刷一次）。
+  Future<void> _flushAccountsFor(
+    SyncService syncService,
+    List<Message> messages,
+  ) async {
+    final accountIds = messages.map((m) => m.accountId).toSet();
+    for (final accountId in accountIds) {
+      try {
+        final account = await syncService.accountConfigFor(accountId);
+        await syncService.flushOutbox(account);
+      } catch (_) {
+        // 推送失败不影响本地乐观更新；条目留在 outbox，下次同步重试。
       }
     }
   }

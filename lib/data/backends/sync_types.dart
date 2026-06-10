@@ -18,6 +18,19 @@ class PageCursor {
   static const PageCursor start = PageCursor();
 }
 
+/// 一页信封 + 指向更旧一页的游标（历史回填用）。
+///
+/// [nextCursor] 为 null 表示没有更早的邮件了（已翻到底）。
+class EnvelopePage {
+  const EnvelopePage({this.envelopes = const [], this.nextCursor});
+
+  /// 本页信封（按日期/UID 倒序，新→旧）。
+  final List<MessageEnvelope> envelopes;
+
+  /// 取更旧一页的游标；null 表示到底。
+  final PageCursor? nextCursor;
+}
+
 /// 增量同步结果：自上次游标以来的变更集。
 class SyncResult {
   const SyncResult({

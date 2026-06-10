@@ -3,19 +3,20 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:m3e_core/m3e_core.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../app/providers.dart';
 import '../../core/navigation/predictive_back_shared_element.dart';
+import '../../core/theme/mail_list_colors.dart';
 import '../../data/local/database/app_database.dart';
 import '../../domain/enums/message_enums.dart';
 import '../../domain/models/mail_attachment.dart';
-import '../../domain/models/mail_recipient.dart';
 import '../home/widgets/gmail_mobile_message_item.dart';
 import 'widgets/attachment_list.dart';
 import 'widgets/folder_picker_dialog.dart';
+import 'widgets/message_header_tile.dart';
 import 'widgets/message_html_view.dart';
-import 'widgets/recipient_section.dart';
 
 /// 邮件详情页面（独立路由）。
 ///
@@ -39,7 +40,6 @@ class MessageDetailPage extends ConsumerStatefulWidget {
 }
 
 class _MessageDetailPageState extends ConsumerState<MessageDetailPage> {
-  bool _autoMarkReadDone = false;
   String? _registeredSharedElementId;
 
   String get messageId => widget.messageId;
@@ -92,23 +92,143 @@ class _MessageDetailPageState extends ConsumerState<MessageDetailPage> {
     _registeredSharedElementId = null;
   }
 
-  /// 打开邮件即标记为已读：通过 SyncService 走 outbox，下一次同步会推送到服务端。
-  /// 这里不阻塞 UI；失败也不弹错（最终一致即可）。
-  Future<void> _ensureMarkedRead(Message message) async {
-    if (_autoMarkReadDone) return;
-    final isRead = (message.flagsBitmask & (1 << MessageFlag.seen.index)) != 0;
-    if (isRead) {
-      _autoMarkReadDone = true;
-      return;
-    }
-    _autoMarkReadDone = true;
+  /// 归档：移动到归档文件夹并返回列表。账户无归档文件夹时提示失败。
+  Future<void> _archiveMessage() async {
+    final message = await ref.read(databaseProvider).messageDao.getMessage(
+      messageId,
+    );
+    if (message == null || !mounted) return;
+
+    final syncService = ref.read(syncServiceProvider);
     try {
-      await ref
-          .read(syncServiceProvider)
-          .setMessageFlag(message.id, flag: MessageFlag.seen, value: true);
-    } catch (_) {
-      _autoMarkReadDone = false;
+      await syncService.moveMessageToFolderType(message.id, FolderType.archive);
+      final account = await syncService.accountConfigFor(message.accountId);
+      unawaited(syncService.flushOutbox(account));
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('已归档')));
+      context.pop();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('归档失败: $e')));
     }
+  }
+
+  /// 删除：确认后删除并返回列表。
+  Future<void> _deleteMessage() async {
+    final message = await ref.read(databaseProvider).messageDao.getMessage(
+      messageId,
+    );
+    if (message == null || !mounted) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除邮件'),
+        content: const Text('确定要删除这封邮件吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    try {
+      final syncService = ref.read(syncServiceProvider);
+      await syncService.deleteMessage(message.id);
+      final account = await syncService.accountConfigFor(message.accountId);
+      unawaited(syncService.flushOutbox(account));
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('邮件已删除')));
+      context.pop();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('删除失败: $e')));
+    }
+  }
+
+  /// 切换已读/未读：本地立即更新 + 入队推送到服务端，原地停留。
+  Future<void> _toggleRead(bool isRead) async {
+    try {
+      final syncService = ref.read(syncServiceProvider);
+      await syncService.setMessageFlag(
+        messageId,
+        flag: MessageFlag.seen,
+        value: !isRead,
+      );
+      // 立即推送，否则只入队、要等下一次周期同步才回推服务端。
+      final message = await ref.read(databaseProvider).messageDao.getMessage(
+        messageId,
+      );
+      if (message != null) {
+        final account = await syncService.accountConfigFor(message.accountId);
+        unawaited(syncService.flushOutbox(account));
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(isRead ? '已标记为未读' : '已标记为已读')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('操作失败: $e')));
+    }
+  }
+
+  /// 移动到文件夹（选择目标后移动，原地停留）。
+  Future<void> _moveMessage() async {
+    final message = await ref.read(databaseProvider).messageDao.getMessage(
+      messageId,
+    );
+    if (message == null || !mounted) return;
+
+    final targetFolder = await showFolderPicker(
+      context,
+      accountId: message.accountId,
+      currentFolderId: message.folderId,
+    );
+    if (targetFolder == null || !mounted) return;
+
+    try {
+      final syncService = ref.read(syncServiceProvider);
+      await syncService.moveMessageToFolder(message.id, targetFolder.id);
+      final account = await syncService.accountConfigFor(message.accountId);
+      unawaited(syncService.flushOutbox(account));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('已移动到 ${targetFolder.displayName}'),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('移动失败: $e')));
+    }
+  }
+
+  /// 暂未实现的功能（回复/转发/打印/帮助等）：先弹占位提示。
+  void _notImplemented(String label) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('$label功能开发中')));
   }
 
   @override
@@ -123,185 +243,75 @@ class _MessageDetailPageState extends ConsumerState<MessageDetailPage> {
         surfaceTintColor: Colors.transparent,
         actions: [
           IconButton(
-            icon: const Icon(Icons.reply),
-            tooltip: '回复',
-            onPressed: () {
-              // TODO: 回复邮件
-            },
+            icon: const Icon(Icons.archive_outlined),
+            tooltip: '归档',
+            onPressed: _archiveMessage,
           ),
           IconButton(
-            icon: const Icon(Icons.forward),
-            tooltip: '转发',
-            onPressed: () {
-              // TODO: 转发邮件
+            icon: const Icon(Icons.delete_outline),
+            tooltip: '删除',
+            onPressed: _deleteMessage,
+          ),
+          // 已读/未读：实时标志位驱动图标与动作，Consumer 把重建限定在按钮本身，
+          // 不触发正文 WebView 重建。
+          Consumer(
+            builder: (context, ref, _) {
+              final flags =
+                  ref.watch(messageFlagsProvider(messageId)).value ??
+                  (widget.initialMessage?.flagsBitmask ?? 0);
+              final isRead = (flags & (1 << MessageFlag.seen.index)) != 0;
+              return IconButton(
+                icon: Icon(
+                  isRead
+                      ? Icons.mark_email_unread_outlined
+                      : Icons.mark_email_read_outlined,
+                ),
+                tooltip: isRead ? '标为未读' : '标为已读',
+                onPressed: () => _toggleRead(isRead),
+              );
             },
           ),
           PopupMenuButton<String>(
-            onSelected: (value) async {
-              final db = ref.read(databaseProvider);
-              final message = await db.messageDao.getMessage(messageId);
-              if (message == null) return;
-
+            tooltip: '更多',
+            icon: const Icon(Icons.more_vert),
+            onSelected: (value) {
               switch (value) {
-                case 'delete':
-                  // 删除邮件（显示确认对话框）
-                  if (context.mounted) {
-                    final confirmed = await showDialog<bool>(
-                      context: context,
-                      builder: (context) => AlertDialog(
-                        title: const Text('删除邮件'),
-                        content: const Text('确定要删除这封邮件吗？'),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.of(context).pop(false),
-                            child: const Text('取消'),
-                          ),
-                          FilledButton(
-                            onPressed: () => Navigator.of(context).pop(true),
-                            child: const Text('删除'),
-                          ),
-                        ],
-                      ),
-                    );
-
-                    if (confirmed == true) {
-                      try {
-                        final syncService = ref.read(syncServiceProvider);
-                        await syncService.deleteMessage(message.id);
-                        final account = await syncService.accountConfigFor(
-                          message.accountId,
-                        );
-                        unawaited(syncService.flushOutbox(account));
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('邮件已删除')),
-                          );
-                          context.pop(); // 返回列表页
-                        }
-                      } catch (e) {
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(
-                            context,
-                          ).showSnackBar(SnackBar(content: Text('删除失败: $e')));
-                        }
-                      }
-                    }
-                  }
-                  break;
-
-                case 'mark_unread':
-                  // 标记为未读：通过 SyncService，本地立即更新 + 入队推送到 Graph。
-                  await ref
-                      .read(syncServiceProvider)
-                      .setMessageFlag(
-                        message.id,
-                        flag: MessageFlag.seen,
-                        value: false,
-                      );
-                  if (context.mounted) {
-                    ScaffoldMessenger.of(
-                      context,
-                    ).showSnackBar(const SnackBar(content: Text('已标记为未读')));
-                  }
-                  break;
-
-                case 'star':
-                  // 切换星标：同样走 SyncService，确保推送到服务端。
-                  final isFlagged =
-                      (message.flagsBitmask &
-                          (1 << MessageFlag.flagged.index)) !=
-                      0;
-                  await ref
-                      .read(syncServiceProvider)
-                      .setMessageFlag(
-                        message.id,
-                        flag: MessageFlag.flagged,
-                        value: !isFlagged,
-                      );
-                  if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(isFlagged ? '已取消星标' : '已加星标')),
-                    );
-                  }
-                  break;
-
                 case 'move':
-                  // 移动到文件夹
-                  if (context.mounted) {
-                    final targetFolder = await showFolderPicker(
-                      context,
-                      accountId: message.accountId,
-                      currentFolderId: message.folderId,
-                    );
-
-                    if (targetFolder != null && context.mounted) {
-                      try {
-                        final syncService = ref.read(syncServiceProvider);
-                        await syncService.moveMessageToFolder(
-                          message.id,
-                          targetFolder.id,
-                        );
-                        final account = await syncService.accountConfigFor(
-                          message.accountId,
-                        );
-                        unawaited(syncService.flushOutbox(account));
-                        if (!context.mounted) return;
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text('已移动到 ${targetFolder.displayName}'),
-                            duration: const Duration(seconds: 3),
-                          ),
-                        );
-                      } catch (e) {
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(
-                            context,
-                          ).showSnackBar(SnackBar(content: Text('移动失败: $e')));
-                        }
-                      }
-                    }
-                  }
-                  break;
+                  _moveMessage();
+                case 'print':
+                  _notImplemented('全部打印');
+                case 'help':
+                  _notImplemented('帮助和反馈');
               }
             },
             itemBuilder: (context) => [
-              const PopupMenuItem(
-                value: 'delete',
-                child: Row(
-                  children: [
-                    Icon(Icons.delete_outline),
-                    SizedBox(width: 12),
-                    Text('删除'),
-                  ],
-                ),
-              ),
-              const PopupMenuItem(
-                value: 'mark_unread',
-                child: Row(
-                  children: [
-                    Icon(Icons.mark_email_unread_outlined),
-                    SizedBox(width: 12),
-                    Text('标记为未读'),
-                  ],
-                ),
-              ),
-              const PopupMenuItem(
-                value: 'star',
-                child: Row(
-                  children: [
-                    Icon(Icons.star_border),
-                    SizedBox(width: 12),
-                    Text('加星标'),
-                  ],
-                ),
-              ),
               const PopupMenuItem(
                 value: 'move',
                 child: Row(
                   children: [
                     Icon(Icons.drive_file_move_outline),
                     SizedBox(width: 12),
-                    Text('移动到...'),
+                    Text('移动到'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'print',
+                child: Row(
+                  children: [
+                    Icon(Icons.print_outlined),
+                    SizedBox(width: 12),
+                    Text('全部打印'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'help',
+                child: Row(
+                  children: [
+                    Icon(Icons.help_outline),
+                    SizedBox(width: 12),
+                    Text('帮助和反馈'),
                   ],
                 ),
               ),
@@ -370,17 +380,14 @@ class _MessageDetailPageState extends ConsumerState<MessageDetailPage> {
             );
           }
 
-          // 邮件首次进入视图时自动标记为已读。在 build 之外、frame 完成后触发，
-          // 避免 build 阶段触发 setState/数据库写。
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _ensureMarkedRead(message);
-          });
+          // 注册「收束到按钮」返回预览：键用入口 messageId（= 列表会话行的共享
+          // 元素 id），多卡片会话不影响收束（预览由列表行 target 提供）。
           _registerReturnPreview(
             message,
             sourceBackgroundColor: theme.colorScheme.surface,
           );
 
-          return _MessageContent(message: message);
+          return _ThreadContent(key: ValueKey(message.id), entry: message);
         },
       ),
     );
@@ -406,98 +413,277 @@ bool _sameVisibleMessage(Message? previous, Message? next) {
       previous.date == next.date;
 }
 
-/// 邮件内容组件。
-class _MessageContent extends StatelessWidget {
-  const _MessageContent({required this.message});
+/// 会话内容组件：把整条会话（账户内同 threadKey）的邮件按时间升序堆叠成多张卡片。
+///
+/// 结构：主题 + 星标 → 每封邮件一张卡片（[MessageHeaderTile] 头部 + 可折叠正文）。
+/// 默认仅展开最新一封与未读邮件；折叠且从未展开过的卡片不挂载正文（不触发下载），
+/// 展开过的用 Offstage 保活，再次折叠不丢状态。打开会话即把其中所有未读标为已读。
+/// threadKey 为空时退化为单封会话。
+class _ThreadContent extends ConsumerStatefulWidget {
+  const _ThreadContent({required this.entry, super.key});
 
-  final Message message;
+  /// 进入会话的入口邮件（列表里点中的代表邮件），提供 accountId/threadKey。
+  final Message entry;
+
+  @override
+  ConsumerState<_ThreadContent> createState() => _ThreadContentState();
+}
+
+class _ThreadContentState extends ConsumerState<_ThreadContent> {
+  late final Stream<List<Message>> _threadStream;
+
+  /// 当前展开的邮件 id。
+  final Set<String> _expanded = <String>{};
+
+  /// 曾展开过的邮件 id：用于保活（折叠后 Offstage 隐藏而非卸载正文）。
+  final Set<String> _everExpanded = <String>{};
+
+  bool _initializedExpansion = false;
+  bool _autoMarkReadDone = false;
+
+  Message get entry => widget.entry;
+
+  @override
+  void initState() {
+    super.initState();
+    // 首帧先展开入口邮件（= 会话最新一封），避免初始一片折叠。
+    _expanded.add(entry.id);
+    _everExpanded.add(entry.id);
+
+    final db = ref.read(databaseProvider);
+    // 尊重「会话视图」开关：关闭时阅读页只显示点开的这一封（与列表一封一行一致）。
+    final conversationView = ref.read(displaySettingsProvider).conversationView;
+    final threadKey = entry.threadKey?.trim();
+    if (conversationView && threadKey != null && threadKey.isNotEmpty) {
+      // 整个账户内同 threadKey 的邮件（跨文件夹），按日期升序。
+      // 用 distinct 忽略 flag-only 变化，避免自动已读写入重建正文 WebView。
+      _threadStream = db.messageDao
+          .watchThread(entry.accountId, threadKey)
+          .distinct(_sameThread);
+    } else {
+      _threadStream = db.messageDao
+          .watchMessage(entry.id)
+          .map((m) => m == null ? <Message>[] : <Message>[m])
+          .distinct(_sameThread);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final cardColor = mailListSurfaceColor(theme);
+    final displaySettings = ref.watch(displaySettingsProvider);
+    final accounts =
+        ref.watch(accountsStreamProvider).value ?? const <Account>[];
+    final selfEmails = <String>{
+      for (final account in accounts) account.email.trim().toLowerCase(),
+    };
 
-    return RepaintBoundary(
-      child: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          // 主题
-          Text(message.subject, style: theme.textTheme.headlineSmall),
-          const SizedBox(height: 16),
+    return StreamBuilder<List<Message>>(
+      initialData: <Message>[entry],
+      stream: _threadStream,
+      builder: (context, snapshot) {
+        final data = snapshot.data;
+        final thread = (data == null || data.isEmpty) ? <Message>[entry] : data;
 
-          // 发件人信息
-          Row(
+        // 拿到真实会话数据（非 initialData）后，按「最新 + 未读」补充默认展开。
+        if (snapshot.connectionState != ConnectionState.waiting) {
+          _ensureExpansionInitialized(thread);
+        }
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _ensureThreadMarkedRead(thread);
+        });
+
+        // 代表邮件：会话最新一封（升序末尾）。
+        final representative = thread.last;
+        // 该会话所属账户：阅读页按账户内 threadKey 分组，整条会话同属一个账户。
+        final account = _accountFor(accounts, representative.accountId);
+
+        return RepaintBoundary(
+          child: ListView(
+            padding: const EdgeInsets.symmetric(vertical: 8),
             children: [
-              CircleAvatar(
-                radius: 24,
-                backgroundColor: theme.colorScheme.primaryContainer,
-                child: Text(
-                  (message.fromName ?? message.fromEmail ?? '?')[0]
-                      .toUpperCase(),
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    color: theme.colorScheme.onPrimaryContainer,
+              // 账户标签：以账户颜色为底，显示账户名称，置于主题上方。
+              if (account != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: _AccountBadge(account: account),
                   ),
                 ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
+              // 主题行：主题 + 星标按钮同行。
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+                child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      message.fromName ?? message.fromEmail ?? '未知发件人',
-                      style: theme.textTheme.bodyLarge?.copyWith(
-                        fontWeight: FontWeight.w500,
+                    Expanded(
+                      child: Text(
+                        representative.subject.isEmpty
+                            ? '(无主题)'
+                            : representative.subject,
+                        style: theme.textTheme.headlineSmall,
                       ),
                     ),
-                    if (message.fromEmail != null)
-                      Text(
-                        message.fromEmail!,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
+                    const SizedBox(width: 8),
+                    // 星标作用于代表邮件；实时标志位驱动，Consumer 限定重建范围。
+                    Consumer(
+                      builder: (context, ref, _) {
+                        final flags =
+                            ref
+                                .watch(messageFlagsProvider(representative.id))
+                                .value ??
+                            representative.flagsBitmask;
+                        final isFlagged =
+                            (flags & (1 << MessageFlag.flagged.index)) != 0;
+                        return IconButton(
+                          icon: Icon(
+                            isFlagged ? Icons.star : Icons.star_border,
+                          ),
+                          color: isFlagged ? const Color(0xFFE0A100) : null,
+                          tooltip: isFlagged ? '取消星标' : '星标',
+                          onPressed: () => _toggleStar(representative, isFlagged),
+                        );
+                      },
+                    ),
                   ],
                 ),
               ),
-              Text(
-                _formatDate(message.date),
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
+
+              // 每封邮件一张卡片（多封 = 会话堆叠）。
+              M3ECardList(
+                itemCount: thread.length,
+                margin: const EdgeInsets.symmetric(horizontal: 12),
+                padding: EdgeInsets.zero,
+                gap: 3,
+                outerRadius: 24,
+                innerRadius: 4,
+                color: cardColor,
+                itemBuilder: (context, index) {
+                  final message = thread[index];
+                  final expanded = _expanded.contains(message.id);
+                  // 从未展开过的折叠卡片不挂载正文，避免一次性下载整条会话的正文。
+                  final mountBody =
+                      expanded || _everExpanded.contains(message.id);
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      MessageHeaderTile(
+                        message: message,
+                        selfEmails: selfEmails,
+                        displaySettings: displaySettings,
+                        collapsed: !expanded,
+                        onToggleCollapsed: () => _toggleExpanded(message.id),
+                      ),
+                      if (mountBody)
+                        Offstage(
+                          offstage: !expanded,
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                            child: _MessageBody(
+                              key: ValueKey(message.id),
+                              message: message,
+                              backgroundColor: cardColor,
+                            ),
+                          ),
+                        ),
+                    ],
+                  );
+                },
               ),
             ],
           ),
-          const SizedBox(height: 16),
-
-          // 收件人信息（可展开）
-          RecipientSection(
-            toRecipients: RecipientUtils.parseRecipients(message.toRecipients),
-            ccRecipients: RecipientUtils.parseRecipients(message.ccRecipients),
-          ),
-
-          const Divider(height: 32),
-
-          // 邮件正文与附件：打开即自动下载，下载完成后响应式预览。
-          _MessageBody(key: ValueKey(message.id), message: message),
-        ],
-      ),
+        );
+      },
     );
   }
 
-  String _formatDate(DateTime date) {
-    final now = DateTime.now();
-    final diff = now.difference(date);
-
-    if (diff.inDays == 0) {
-      return '今天 ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
-    } else if (diff.inDays == 1) {
-      return '昨天 ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
-    } else if (diff.inDays < 7) {
-      return '${diff.inDays}天前';
-    } else {
-      return '${date.year}/${date.month}/${date.day} ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
+  void _ensureExpansionInitialized(List<Message> thread) {
+    if (_initializedExpansion) return;
+    _initializedExpansion = true;
+    if (thread.isNotEmpty) {
+      _expanded.add(thread.last.id); // 最新一封
+      _everExpanded.add(thread.last.id);
+    }
+    final seenBit = 1 << MessageFlag.seen.index;
+    for (final m in thread) {
+      if ((m.flagsBitmask & seenBit) == 0) {
+        _expanded.add(m.id); // 未读默认展开
+        _everExpanded.add(m.id);
+      }
     }
   }
+
+  void _toggleExpanded(String id) {
+    setState(() {
+      if (_expanded.remove(id)) return;
+      _expanded.add(id);
+      _everExpanded.add(id);
+    });
+  }
+
+  /// 打开会话即把其中所有未读标记为已读：走 outbox，按账户去重各刷一次。
+  /// 不阻塞 UI；失败不弹错（最终一致即可）。
+  Future<void> _ensureThreadMarkedRead(List<Message> thread) async {
+    if (_autoMarkReadDone) return;
+    _autoMarkReadDone = true;
+    final seenBit = 1 << MessageFlag.seen.index;
+    final unread = thread
+        .where((m) => (m.flagsBitmask & seenBit) == 0)
+        .toList(growable: false);
+    if (unread.isEmpty) return;
+    try {
+      final syncService = ref.read(syncServiceProvider);
+      for (final message in unread) {
+        await syncService.setMessageFlag(
+          message.id,
+          flag: MessageFlag.seen,
+          value: true,
+        );
+      }
+      // 立即推送，否则只入队、要等下一次周期同步才回推服务端。
+      for (final accountId in unread.map((m) => m.accountId).toSet()) {
+        final account = await syncService.accountConfigFor(accountId);
+        unawaited(syncService.flushOutbox(account));
+      }
+    } catch (_) {
+      _autoMarkReadDone = false;
+    }
+  }
+
+  Future<void> _toggleStar(Message message, bool isFlagged) {
+    return ref
+        .read(syncServiceProvider)
+        .setMessageFlag(
+          message.id,
+          flag: MessageFlag.flagged,
+          value: !isFlagged,
+        );
+  }
+}
+
+/// 比较两个会话快照是否「可见结构」一致：忽略 flag-only 变化，
+/// 使自动已读等标志位写入不会重建正文 WebView（与 [_sameVisibleMessage] 同理）。
+bool _sameThread(List<Message> a, List<Message> b) {
+  if (identical(a, b)) return true;
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    final x = a[i];
+    final y = b[i];
+    if (x.id != y.id ||
+        x.folderId != y.folderId ||
+        x.subject != y.subject ||
+        x.fromName != y.fromName ||
+        x.fromEmail != y.fromEmail ||
+        x.toRecipients != y.toRecipients ||
+        x.ccRecipients != y.ccRecipients ||
+        x.date != y.date) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /// 邮件正文区：打开邮件即自动下载正文，下载完成后通过 `watchBody` 响应式预览。
@@ -506,9 +692,16 @@ class _MessageContent extends StatelessWidget {
 /// 空正文（"（无正文）" + 重新下载）。手动重试走 [SyncService.fetchMessageBody] 的
 /// `force: true`，正常情况下首帧的自动下载已覆盖。
 class _MessageBody extends ConsumerStatefulWidget {
-  const _MessageBody({required this.message, super.key});
+  const _MessageBody({
+    required this.message,
+    required this.backgroundColor,
+    super.key,
+  });
 
   final Message message;
+
+  /// 正文 WebView 的背景色：设为所在卡片色，使正文与卡片无缝衔接。
+  final Color backgroundColor;
 
   @override
   ConsumerState<_MessageBody> createState() => _MessageBodyState();
@@ -614,7 +807,7 @@ class _MessageBodyState extends ConsumerState<_MessageBody> {
           MessageHtmlView(
             htmlBody: body.htmlBody!,
             textStyle: theme.textTheme.bodyMedium,
-            backgroundColor: theme.colorScheme.surface,
+            backgroundColor: widget.backgroundColor,
             foregroundColor: theme.colorScheme.onSurface,
             linkColor: theme.colorScheme.primary,
             borderColor: theme.colorScheme.outlineVariant,
@@ -773,5 +966,57 @@ class _MessageBodyState extends ConsumerState<_MessageBody> {
       }
     }
     return true;
+  }
+}
+
+/// 在账户列表中按 id 查找邮件所属账户；列表未就绪或找不到时返回 null。
+Account? _accountFor(List<Account> accounts, String accountId) {
+  for (final account in accounts) {
+    if (account.id == accountId) return account;
+  }
+  return null;
+}
+
+/// 会话主题上方的账户标签：以账户颜色为底色的圆角标签，显示账户名称。
+///
+/// 文字颜色按底色明暗自动取黑/白以保证对比度；账户未配置颜色时回退到主色。
+/// 名称为空时回退到邮箱地址，悬浮显示完整邮箱。
+class _AccountBadge extends StatelessWidget {
+  const _AccountBadge({required this.account});
+
+  final Account account;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final color = account.colorValue == null
+        ? theme.colorScheme.primary
+        : Color(account.colorValue!);
+    final onColor =
+        ThemeData.estimateBrightnessForColor(color) == Brightness.dark
+        ? Colors.white
+        : Colors.black;
+    final name = account.displayName.trim();
+    final label = name.isEmpty ? account.email : name;
+
+    return Tooltip(
+      message: account.email,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.labelMedium?.copyWith(
+            color: onColor,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+    );
   }
 }

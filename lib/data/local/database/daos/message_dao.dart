@@ -76,6 +76,20 @@ class MessageDao extends DatabaseAccessor<AppDatabase> with _$MessageDaoMixin {
     )..where((t) => t.id.equals(id))).watchSingleOrNull();
   }
 
+  /// 监听整个账户内同一会话（线程）的全部邮件，按日期升序（最旧在前）。
+  ///
+  /// 会话跨文件夹：收件箱/已发送/归档里同 [threadKey] 的邮件都会聚合到一起，
+  /// 用于会话阅读页把往来按时间堆叠展示。仅在账户内归并（threadKey 仅在账户内
+  /// 可比）。threadKey 为空的邮件不应走此查询，由调用方退化为单封 [watchMessage]。
+  Stream<List<Message>> watchThread(String accountId, String threadKey) {
+    return (select(messages)
+          ..where(
+            (t) => t.accountId.equals(accountId) & t.threadKey.equals(threadKey),
+          )
+          ..orderBy([(t) => OrderingTerm.asc(t.date)]))
+        .watch();
+  }
+
   /// 监听某账户所有文件夹的邮件（用于账户级视图）。
   Stream<List<Message>> watchAccountMessages(
     String accountId, {
@@ -218,6 +232,40 @@ class MessageDao extends DatabaseAccessor<AppDatabase> with _$MessageDaoMixin {
 
   Future<void> upsertSyncState(SyncStatesCompanion state) {
     return into(syncStates).insertOnConflictUpdate(state);
+  }
+
+  /// 清除某文件夹的同步状态（增量游标 + 回填游标）。
+  ///
+  /// 下次 [syncFolder] 因游标为空走全量重建，用于「修复文件夹」补回历史空洞。
+  Future<void> deleteSyncState(String folderId) {
+    return (delete(syncStates)..where((t) => t.folderId.equals(folderId))).go();
+  }
+
+  /// 仅更新某文件夹的历史回填游标/到底标志，不触碰 deltaLink/lastSyncAt 等其它列。
+  ///
+  /// 行不存在时先建行（仅含回填列），避免后续增量游标被覆盖。
+  Future<void> updateBackfillState(
+    String folderId, {
+    String? cursor,
+    bool? done,
+  }) async {
+    final affected =
+        await (update(syncStates)..where((t) => t.folderId.equals(folderId)))
+            .write(
+              SyncStatesCompanion(
+                backfillCursor: Value(cursor),
+                backfillDone: done == null ? const Value.absent() : Value(done),
+              ),
+            );
+    if (affected == 0) {
+      await into(syncStates).insert(
+        SyncStatesCompanion.insert(
+          folderId: folderId,
+          backfillCursor: Value(cursor),
+          backfillDone: done == null ? const Value.absent() : Value(done),
+        ),
+      );
+    }
   }
 
   /// 搜索邮件（按主题、发件人、预览内容）。

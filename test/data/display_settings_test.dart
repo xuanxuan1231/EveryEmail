@@ -37,6 +37,7 @@ void main() {
       showAttachmentIcon: false,
       showUnreadIndicator: false,
       showStarButton: false,
+      conversationView: false,
       prefetchBodies: false,
     );
 

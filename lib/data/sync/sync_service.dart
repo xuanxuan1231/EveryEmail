@@ -374,6 +374,73 @@ class SyncService {
     onFolderSynced?.call(folder.id, folder.folderType);
   }
 
+  /// 按需同步单个文件夹（用户主动点开 / 下拉刷新该文件夹时调用）。
+  ///
+  /// 与 [syncAccount] 不同：**不经过 `AccountSettings.canSyncFolder` 的范围门控**，
+  /// 因此即使是默认不自动同步的垃圾邮件/废纸篓，用户主动打开也能拉取到内容。
+  /// 走账户串行队列的高优先级，与取正文/预取互斥。
+  Future<void> syncSingleFolder(AccountConfig account, Folder folder) {
+    return _runOnAccount<void>(
+      account.id,
+      () => syncFolder(account, folder),
+      highPriority: true,
+    );
+  }
+
+  /// 历史回填一页：向更旧方向翻一页并落库（“加载更多”）。
+  ///
+  /// 增量同步只拿更新的邮件，首次同步又有上限，故首次窗口之外的旧邮件需经此回填。
+  /// 用独立的 `backfillCursor`（不动增量游标 `deltaLink`）逐页向更旧翻；翻到底置
+  /// `backfillDone`。返回是否**可能**还有更旧的一页（true=可继续调用）。
+  Future<bool> loadMoreFolder(AccountConfig account, Folder folder) {
+    return _runOnAccount<bool>(account.id, () async {
+      final syncState = await _db.messageDao.getSyncState(folder.id);
+      if (syncState?.backfillDone ?? false) return false;
+
+      final cursorToken = syncState?.backfillCursor;
+      final cursor = cursorToken == null
+          ? PageCursor.start
+          : PageCursor(graphNextLink: cursorToken);
+
+      final backend = await _getBackend(account);
+      final page = await backend.fetchEnvelopes(
+        folder.toMailboxFolder(),
+        cursor: cursor,
+        limit: _backfillPageSize,
+      );
+
+      // upsert 幂等：首页与已有最新邮件重叠无害，更旧的会新增进来。
+      await _persistMessages(page.envelopes, folder);
+
+      final next = page.nextCursor;
+      if (next == null) {
+        await _db.messageDao.updateBackfillState(folder.id, done: true);
+        return false;
+      }
+      await _db.messageDao.updateBackfillState(
+        folder.id,
+        cursor: next.graphNextLink,
+        done: false,
+      );
+      return true;
+    }, highPriority: true);
+  }
+
+  /// 修复文件夹：清空同步游标后强制全量重建，用于补回历史「空洞」
+  /// （某次增量取元数据失败、游标却已前进，导致中间一段邮件永久缺失）。
+  ///
+  /// 走账户串行队列高优先级。全量会重取最新一批并幂等落库，填补最近的缺口；
+  /// 更早的缺口仍可经 [loadMoreFolder]（“加载更多”）翻页补回。
+  Future<void> repairFolder(AccountConfig account, Folder folder) {
+    return _runOnAccount<void>(account.id, () async {
+      await _db.messageDao.deleteSyncState(folder.id);
+      await syncFolder(account, folder); // 游标为空 → 全量重建
+    }, highPriority: true);
+  }
+
+  /// 历史回填每页拉取的信封数。
+  static const int _backfillPageSize = 50;
+
   /// 持久化邮件列表到数据库。
   Future<void> _persistMessages(
     List<MessageEnvelope> envelopes,
@@ -687,10 +754,18 @@ class SyncService {
         : message.flagsBitmask & ~(1 << flag.index);
     if (newBitmask == message.flagsBitmask) return;
 
-    final remoteId = message.graphMessageId ?? message.imapUid?.toString();
-    if (remoteId == null) {
+    // 仅 seen 标志影响未读角标：标读 -1、标未读 +1。服务端计数为基线，
+    // 这里本地即时增减让角标及时变化，下次整账户同步再以 listFolders 矫正。
+    final unreadDelta = flag == MessageFlag.seen ? (value ? -1 : 1) : 0;
+
+    // 远端引用：Gmail 用 gmailMessageId、Graph 用 graphMessageId、IMAP 用 uid。
+    // 必须用 _refPayloadForMessage 统一推导（早期只判断 graph/imap，漏了 Gmail，
+    // 导致 Gmail 邮件的已读状态从不入队、永不回推服务端）。
+    final refPayload = await _refPayloadForMessage(message);
+    if (refPayload == null) {
       // 本地草稿等没有远端引用，仅更新本地。
       await _db.messageDao.updateFlags(messageId, newBitmask);
+      await _adjustFolderUnread(message.folderId, unreadDelta);
       return;
     }
 
@@ -698,30 +773,51 @@ class SyncService {
     final opType = _opTypeFor(flag, value);
     if (opType == null) {
       await _db.messageDao.updateFlags(messageId, newBitmask);
+      await _adjustFolderUnread(message.folderId, unreadDelta);
       return;
     }
 
     await _db.transaction(() async {
       await _db.messageDao.updateFlags(messageId, newBitmask);
+      await _adjustFolderUnread(message.folderId, unreadDelta);
       await _db.outboxDao.removeForMessage(message.accountId, messageId, flag);
       await _db.outboxDao.enqueue(
         OutboxOpsCompanion.insert(
           accountId: message.accountId,
           opType: opType,
-          payload: Value(jsonEncode({'messageId': messageId})),
+          payload: Value(
+            jsonEncode({'messageId': messageId, 'ref': refPayload}),
+          ),
         ),
       );
     });
   }
+
+  /// 把文件夹未读角标按 [delta] 本地增减（服务端计数为基线、这里保证及时）。
+  /// 读改写并钳制非负；下次整账户同步会以 [FolderDao.updateFromRemote] 矫正漂移。
+  Future<void> _adjustFolderUnread(String folderId, int delta) async {
+    if (delta == 0) return;
+    final folder = await _db.folderDao.getFolder(folderId);
+    if (folder == null) return;
+    final next = folder.unreadCount + delta;
+    await _db.folderDao.updateCounts(folderId, unread: next < 0 ? 0 : next);
+  }
+
+  /// 邮件当前是否未读（seen 位未置）。
+  bool _isUnread(int flagsBitmask) =>
+      (flagsBitmask & (1 << MessageFlag.seen.index)) == 0;
 
   /// 删除邮件：本地立即移除，并把后端删除操作入队。
   Future<void> deleteMessage(String messageId) async {
     final message = await _db.messageDao.getMessage(messageId);
     if (message == null) return;
 
+    final wasUnread = _isUnread(message.flagsBitmask);
+
     final refPayload = await _refPayloadForMessage(message);
     if (refPayload == null) {
       await _db.messageDao.deleteMessages([messageId]);
+      if (wasUnread) await _adjustFolderUnread(message.folderId, -1);
       return;
     }
 
@@ -741,6 +837,7 @@ class SyncService {
         ),
       );
       await _db.messageDao.deleteMessages([messageId]);
+      if (wasUnread) await _adjustFolderUnread(message.folderId, -1);
     });
   }
 
@@ -760,9 +857,16 @@ class SyncService {
       throw Exception('不能跨账户移动邮件');
     }
 
+    final wasUnread = _isUnread(message.flagsBitmask);
+    final sourceFolderId = message.folderId;
+
     final refPayload = await _refPayloadForMessage(message);
     if (refPayload == null) {
       await _db.messageDao.moveMessage(messageId, targetFolderId);
+      if (wasUnread) {
+        await _adjustFolderUnread(sourceFolderId, -1);
+        await _adjustFolderUnread(targetFolderId, 1);
+      }
       return;
     }
 
@@ -773,6 +877,10 @@ class SyncService {
         const ['move'],
       );
       await _db.messageDao.moveMessage(messageId, targetFolderId);
+      if (wasUnread) {
+        await _adjustFolderUnread(sourceFolderId, -1);
+        await _adjustFolderUnread(targetFolderId, 1);
+      }
       await _db.outboxDao.enqueue(
         OutboxOpsCompanion.insert(
           accountId: message.accountId,

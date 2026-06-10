@@ -13,6 +13,7 @@ import '../../../domain/models/mime_content.dart';
 import '../mail_backend.dart';
 import '../sync_types.dart';
 import '../token_provider.dart';
+import 'imap_thread_key.dart';
 
 /// IMAP 后端实现（基于 enough_mail 高层 MailClient）。
 ///
@@ -191,7 +192,7 @@ class ImapMailBackend implements MailBackend {
   }
 
   @override
-  Future<List<MessageEnvelope>> fetchEnvelopes(
+  Future<EnvelopePage> fetchEnvelopes(
     MailboxFolder folder, {
     PageCursor cursor = PageCursor.start,
     int limit = 50,
@@ -213,9 +214,11 @@ class ImapMailBackend implements MailBackend {
 
       // enough_mail 的 fetchMessages 默认拉取最新 N 封
       final messages = await client.fetchMessages(count: limit);
-      return messages
+      final envelopes = messages
           .map((m) => _mapMessage(m, folder, uidValidity: uidValidity))
           .toList();
+      // IMAP 暂不支持向更旧分页（始终取最新 N 封），无更旧游标。
+      return EnvelopePage(envelopes: envelopes, nextCursor: null);
     } on em.MailException catch (e) {
       throw MailBackendException('拉取信封失败: ${e.message}', cause: e);
     }
@@ -640,7 +643,11 @@ class ImapMailBackend implements MailBackend {
           '',
       flags: _mapFlags(msg.flags),
       hasAttachments: msg.hasAttachments(),
-      threadKey: msg.decodeHeaderValue('references'),
+      threadKey: deriveImapThreadKey(
+        references: msg.decodeHeaderValue('references'),
+        inReplyTo: msg.decodeHeaderValue('in-reply-to'),
+        messageId: msg.decodeHeaderValue('message-id'),
+      ),
       messageIdHeader: msg.decodeHeaderValue('message-id'),
     );
   }

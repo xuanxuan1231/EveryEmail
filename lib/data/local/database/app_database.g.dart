@@ -3441,6 +3441,32 @@ class $SyncStatesTable extends SyncStates
     type: DriftSqlType.dateTime,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _backfillCursorMeta = const VerificationMeta(
+    'backfillCursor',
+  );
+  @override
+  late final GeneratedColumn<String> backfillCursor = GeneratedColumn<String>(
+    'backfill_cursor',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _backfillDoneMeta = const VerificationMeta(
+    'backfillDone',
+  );
+  @override
+  late final GeneratedColumn<bool> backfillDone = GeneratedColumn<bool>(
+    'backfill_done',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("backfill_done" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
   @override
   List<GeneratedColumn> get $columns => [
     folderId,
@@ -3449,6 +3475,8 @@ class $SyncStatesTable extends SyncStates
     highestModSeq,
     deltaLink,
     lastSyncAt,
+    backfillCursor,
+    backfillDone,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -3509,6 +3537,24 @@ class $SyncStatesTable extends SyncStates
         ),
       );
     }
+    if (data.containsKey('backfill_cursor')) {
+      context.handle(
+        _backfillCursorMeta,
+        backfillCursor.isAcceptableOrUnknown(
+          data['backfill_cursor']!,
+          _backfillCursorMeta,
+        ),
+      );
+    }
+    if (data.containsKey('backfill_done')) {
+      context.handle(
+        _backfillDoneMeta,
+        backfillDone.isAcceptableOrUnknown(
+          data['backfill_done']!,
+          _backfillDoneMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -3542,6 +3588,14 @@ class $SyncStatesTable extends SyncStates
         DriftSqlType.dateTime,
         data['${effectivePrefix}last_sync_at'],
       ),
+      backfillCursor: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}backfill_cursor'],
+      ),
+      backfillDone: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}backfill_done'],
+      )!,
     );
   }
 
@@ -3562,6 +3616,12 @@ class SyncState extends DataClass implements Insertable<SyncState> {
   /// delta query 返回的 @odata.deltaLink，下次只取增量。
   final String? deltaLink;
   final DateTime? lastSyncAt;
+
+  /// 下一页更旧邮件的游标（Gmail pageToken / Graph @odata.nextLink）；null 表示尚未回填。
+  final String? backfillCursor;
+
+  /// 是否已回填到底（再无更旧邮件）。
+  final bool backfillDone;
   const SyncState({
     required this.folderId,
     this.uidNext,
@@ -3569,6 +3629,8 @@ class SyncState extends DataClass implements Insertable<SyncState> {
     this.highestModSeq,
     this.deltaLink,
     this.lastSyncAt,
+    this.backfillCursor,
+    required this.backfillDone,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -3589,6 +3651,10 @@ class SyncState extends DataClass implements Insertable<SyncState> {
     if (!nullToAbsent || lastSyncAt != null) {
       map['last_sync_at'] = Variable<DateTime>(lastSyncAt);
     }
+    if (!nullToAbsent || backfillCursor != null) {
+      map['backfill_cursor'] = Variable<String>(backfillCursor);
+    }
+    map['backfill_done'] = Variable<bool>(backfillDone);
     return map;
   }
 
@@ -3610,6 +3676,10 @@ class SyncState extends DataClass implements Insertable<SyncState> {
       lastSyncAt: lastSyncAt == null && nullToAbsent
           ? const Value.absent()
           : Value(lastSyncAt),
+      backfillCursor: backfillCursor == null && nullToAbsent
+          ? const Value.absent()
+          : Value(backfillCursor),
+      backfillDone: Value(backfillDone),
     );
   }
 
@@ -3625,6 +3695,8 @@ class SyncState extends DataClass implements Insertable<SyncState> {
       highestModSeq: serializer.fromJson<int?>(json['highestModSeq']),
       deltaLink: serializer.fromJson<String?>(json['deltaLink']),
       lastSyncAt: serializer.fromJson<DateTime?>(json['lastSyncAt']),
+      backfillCursor: serializer.fromJson<String?>(json['backfillCursor']),
+      backfillDone: serializer.fromJson<bool>(json['backfillDone']),
     );
   }
   @override
@@ -3637,6 +3709,8 @@ class SyncState extends DataClass implements Insertable<SyncState> {
       'highestModSeq': serializer.toJson<int?>(highestModSeq),
       'deltaLink': serializer.toJson<String?>(deltaLink),
       'lastSyncAt': serializer.toJson<DateTime?>(lastSyncAt),
+      'backfillCursor': serializer.toJson<String?>(backfillCursor),
+      'backfillDone': serializer.toJson<bool>(backfillDone),
     };
   }
 
@@ -3647,6 +3721,8 @@ class SyncState extends DataClass implements Insertable<SyncState> {
     Value<int?> highestModSeq = const Value.absent(),
     Value<String?> deltaLink = const Value.absent(),
     Value<DateTime?> lastSyncAt = const Value.absent(),
+    Value<String?> backfillCursor = const Value.absent(),
+    bool? backfillDone,
   }) => SyncState(
     folderId: folderId ?? this.folderId,
     uidNext: uidNext.present ? uidNext.value : this.uidNext,
@@ -3656,6 +3732,10 @@ class SyncState extends DataClass implements Insertable<SyncState> {
         : this.highestModSeq,
     deltaLink: deltaLink.present ? deltaLink.value : this.deltaLink,
     lastSyncAt: lastSyncAt.present ? lastSyncAt.value : this.lastSyncAt,
+    backfillCursor: backfillCursor.present
+        ? backfillCursor.value
+        : this.backfillCursor,
+    backfillDone: backfillDone ?? this.backfillDone,
   );
   SyncState copyWithCompanion(SyncStatesCompanion data) {
     return SyncState(
@@ -3671,6 +3751,12 @@ class SyncState extends DataClass implements Insertable<SyncState> {
       lastSyncAt: data.lastSyncAt.present
           ? data.lastSyncAt.value
           : this.lastSyncAt,
+      backfillCursor: data.backfillCursor.present
+          ? data.backfillCursor.value
+          : this.backfillCursor,
+      backfillDone: data.backfillDone.present
+          ? data.backfillDone.value
+          : this.backfillDone,
     );
   }
 
@@ -3682,7 +3768,9 @@ class SyncState extends DataClass implements Insertable<SyncState> {
           ..write('uidValidity: $uidValidity, ')
           ..write('highestModSeq: $highestModSeq, ')
           ..write('deltaLink: $deltaLink, ')
-          ..write('lastSyncAt: $lastSyncAt')
+          ..write('lastSyncAt: $lastSyncAt, ')
+          ..write('backfillCursor: $backfillCursor, ')
+          ..write('backfillDone: $backfillDone')
           ..write(')'))
         .toString();
   }
@@ -3695,6 +3783,8 @@ class SyncState extends DataClass implements Insertable<SyncState> {
     highestModSeq,
     deltaLink,
     lastSyncAt,
+    backfillCursor,
+    backfillDone,
   );
   @override
   bool operator ==(Object other) =>
@@ -3705,7 +3795,9 @@ class SyncState extends DataClass implements Insertable<SyncState> {
           other.uidValidity == this.uidValidity &&
           other.highestModSeq == this.highestModSeq &&
           other.deltaLink == this.deltaLink &&
-          other.lastSyncAt == this.lastSyncAt);
+          other.lastSyncAt == this.lastSyncAt &&
+          other.backfillCursor == this.backfillCursor &&
+          other.backfillDone == this.backfillDone);
 }
 
 class SyncStatesCompanion extends UpdateCompanion<SyncState> {
@@ -3715,6 +3807,8 @@ class SyncStatesCompanion extends UpdateCompanion<SyncState> {
   final Value<int?> highestModSeq;
   final Value<String?> deltaLink;
   final Value<DateTime?> lastSyncAt;
+  final Value<String?> backfillCursor;
+  final Value<bool> backfillDone;
   final Value<int> rowid;
   const SyncStatesCompanion({
     this.folderId = const Value.absent(),
@@ -3723,6 +3817,8 @@ class SyncStatesCompanion extends UpdateCompanion<SyncState> {
     this.highestModSeq = const Value.absent(),
     this.deltaLink = const Value.absent(),
     this.lastSyncAt = const Value.absent(),
+    this.backfillCursor = const Value.absent(),
+    this.backfillDone = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   SyncStatesCompanion.insert({
@@ -3732,6 +3828,8 @@ class SyncStatesCompanion extends UpdateCompanion<SyncState> {
     this.highestModSeq = const Value.absent(),
     this.deltaLink = const Value.absent(),
     this.lastSyncAt = const Value.absent(),
+    this.backfillCursor = const Value.absent(),
+    this.backfillDone = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : folderId = Value(folderId);
   static Insertable<SyncState> custom({
@@ -3741,6 +3839,8 @@ class SyncStatesCompanion extends UpdateCompanion<SyncState> {
     Expression<int>? highestModSeq,
     Expression<String>? deltaLink,
     Expression<DateTime>? lastSyncAt,
+    Expression<String>? backfillCursor,
+    Expression<bool>? backfillDone,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -3750,6 +3850,8 @@ class SyncStatesCompanion extends UpdateCompanion<SyncState> {
       if (highestModSeq != null) 'highest_mod_seq': highestModSeq,
       if (deltaLink != null) 'delta_link': deltaLink,
       if (lastSyncAt != null) 'last_sync_at': lastSyncAt,
+      if (backfillCursor != null) 'backfill_cursor': backfillCursor,
+      if (backfillDone != null) 'backfill_done': backfillDone,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -3761,6 +3863,8 @@ class SyncStatesCompanion extends UpdateCompanion<SyncState> {
     Value<int?>? highestModSeq,
     Value<String?>? deltaLink,
     Value<DateTime?>? lastSyncAt,
+    Value<String?>? backfillCursor,
+    Value<bool>? backfillDone,
     Value<int>? rowid,
   }) {
     return SyncStatesCompanion(
@@ -3770,6 +3874,8 @@ class SyncStatesCompanion extends UpdateCompanion<SyncState> {
       highestModSeq: highestModSeq ?? this.highestModSeq,
       deltaLink: deltaLink ?? this.deltaLink,
       lastSyncAt: lastSyncAt ?? this.lastSyncAt,
+      backfillCursor: backfillCursor ?? this.backfillCursor,
+      backfillDone: backfillDone ?? this.backfillDone,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -3795,6 +3901,12 @@ class SyncStatesCompanion extends UpdateCompanion<SyncState> {
     if (lastSyncAt.present) {
       map['last_sync_at'] = Variable<DateTime>(lastSyncAt.value);
     }
+    if (backfillCursor.present) {
+      map['backfill_cursor'] = Variable<String>(backfillCursor.value);
+    }
+    if (backfillDone.present) {
+      map['backfill_done'] = Variable<bool>(backfillDone.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -3810,6 +3922,8 @@ class SyncStatesCompanion extends UpdateCompanion<SyncState> {
           ..write('highestModSeq: $highestModSeq, ')
           ..write('deltaLink: $deltaLink, ')
           ..write('lastSyncAt: $lastSyncAt, ')
+          ..write('backfillCursor: $backfillCursor, ')
+          ..write('backfillDone: $backfillDone, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -6916,6 +7030,8 @@ typedef $$SyncStatesTableCreateCompanionBuilder =
       Value<int?> highestModSeq,
       Value<String?> deltaLink,
       Value<DateTime?> lastSyncAt,
+      Value<String?> backfillCursor,
+      Value<bool> backfillDone,
       Value<int> rowid,
     });
 typedef $$SyncStatesTableUpdateCompanionBuilder =
@@ -6926,6 +7042,8 @@ typedef $$SyncStatesTableUpdateCompanionBuilder =
       Value<int?> highestModSeq,
       Value<String?> deltaLink,
       Value<DateTime?> lastSyncAt,
+      Value<String?> backfillCursor,
+      Value<bool> backfillDone,
       Value<int> rowid,
     });
 
@@ -6982,6 +7100,16 @@ class $$SyncStatesTableFilterComposer
 
   ColumnFilters<DateTime> get lastSyncAt => $composableBuilder(
     column: $table.lastSyncAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get backfillCursor => $composableBuilder(
+    column: $table.backfillCursor,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get backfillDone => $composableBuilder(
+    column: $table.backfillDone,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -7043,6 +7171,16 @@ class $$SyncStatesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get backfillCursor => $composableBuilder(
+    column: $table.backfillCursor,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get backfillDone => $composableBuilder(
+    column: $table.backfillDone,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   $$FoldersTableOrderingComposer get folderId {
     final $$FoldersTableOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -7094,6 +7232,16 @@ class $$SyncStatesTableAnnotationComposer
 
   GeneratedColumn<DateTime> get lastSyncAt => $composableBuilder(
     column: $table.lastSyncAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get backfillCursor => $composableBuilder(
+    column: $table.backfillCursor,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<bool> get backfillDone => $composableBuilder(
+    column: $table.backfillDone,
     builder: (column) => column,
   );
 
@@ -7155,6 +7303,8 @@ class $$SyncStatesTableTableManager
                 Value<int?> highestModSeq = const Value.absent(),
                 Value<String?> deltaLink = const Value.absent(),
                 Value<DateTime?> lastSyncAt = const Value.absent(),
+                Value<String?> backfillCursor = const Value.absent(),
+                Value<bool> backfillDone = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => SyncStatesCompanion(
                 folderId: folderId,
@@ -7163,6 +7313,8 @@ class $$SyncStatesTableTableManager
                 highestModSeq: highestModSeq,
                 deltaLink: deltaLink,
                 lastSyncAt: lastSyncAt,
+                backfillCursor: backfillCursor,
+                backfillDone: backfillDone,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -7173,6 +7325,8 @@ class $$SyncStatesTableTableManager
                 Value<int?> highestModSeq = const Value.absent(),
                 Value<String?> deltaLink = const Value.absent(),
                 Value<DateTime?> lastSyncAt = const Value.absent(),
+                Value<String?> backfillCursor = const Value.absent(),
+                Value<bool> backfillDone = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => SyncStatesCompanion.insert(
                 folderId: folderId,
@@ -7181,6 +7335,8 @@ class $$SyncStatesTableTableManager
                 highestModSeq: highestModSeq,
                 deltaLink: deltaLink,
                 lastSyncAt: lastSyncAt,
+                backfillCursor: backfillCursor,
+                backfillDone: backfillDone,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

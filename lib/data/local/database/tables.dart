@@ -199,6 +199,13 @@ class SyncStates extends Table {
 
   DateTimeColumn get lastSyncAt => dateTime().nullable()();
 
+  // —— 历史回填（“加载更多”向更旧翻页）——
+  /// 下一页更旧邮件的游标（Gmail pageToken / Graph @odata.nextLink）；null 表示尚未回填。
+  TextColumn get backfillCursor => text().nullable()();
+
+  /// 是否已回填到底（再无更旧邮件）。
+  BoolColumn get backfillDone => boolean().withDefault(const Constant(false))();
+
   @override
   Set<Column> get primaryKey => {folderId};
 }

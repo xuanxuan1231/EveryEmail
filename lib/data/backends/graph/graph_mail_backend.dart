@@ -143,7 +143,7 @@ class GraphMailBackend implements MailBackend {
   };
 
   @override
-  Future<List<MessageEnvelope>> fetchEnvelopes(
+  Future<EnvelopePage> fetchEnvelopes(
     MailboxFolder folder, {
     PageCursor cursor = PageCursor.start,
     int limit = 50,
@@ -161,10 +161,7 @@ class GraphMailBackend implements MailBackend {
       if (cursor.graphNextLink != null) {
         // 使用 Graph 的 nextLink
         final response = await _dio.get(cursor.graphNextLink!);
-        final messages = (response.data['value'] as List)
-            .map((json) => _mapMessage(json as Map<String, dynamic>, folder))
-            .toList();
-        return messages;
+        return _envelopePageFrom(response.data as Map<String, dynamic>, folder);
       }
 
       if (cursor.offset > 0) {
@@ -176,14 +173,25 @@ class GraphMailBackend implements MailBackend {
         queryParameters: params,
       );
 
-      final messages = (response.data['value'] as List)
-          .map((json) => _mapMessage(json as Map<String, dynamic>, folder))
-          .toList();
-
-      return messages;
+      return _envelopePageFrom(response.data as Map<String, dynamic>, folder);
     } on DioException catch (e) {
       throw MailBackendException('拉取信封失败', cause: e);
     }
+  }
+
+  /// 把一页 Graph messages 响应解析为 [EnvelopePage]，用 @odata.nextLink 承载更旧游标。
+  EnvelopePage _envelopePageFrom(
+    Map<String, dynamic> data,
+    MailboxFolder folder,
+  ) {
+    final messages = (data['value'] as List)
+        .map((json) => _mapMessage(json as Map<String, dynamic>, folder))
+        .toList();
+    final nextLink = data['@odata.nextLink'] as String?;
+    return EnvelopePage(
+      envelopes: messages,
+      nextCursor: nextLink == null ? null : PageCursor(graphNextLink: nextLink),
+    );
   }
 
   @override

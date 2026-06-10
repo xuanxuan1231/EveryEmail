@@ -151,7 +151,7 @@ class GmailApiBackend implements MailBackend {
   }
 
   @override
-  Future<List<MessageEnvelope>> fetchEnvelopes(
+  Future<EnvelopePage> fetchEnvelopes(
     MailboxFolder folder, {
     PageCursor cursor = PageCursor.start,
     int limit = 50,
@@ -171,7 +171,15 @@ class GmailApiBackend implements MailBackend {
         () => _dio.get('/messages', queryParameters: params),
       );
       final ids = _idsFromList(listResp.data);
-      return _fetchMetadataBatch(ids, folder);
+      final fetched = await _fetchMetadataBatch(ids, folder);
+      // nextPageToken 存在即还有更旧的一页；复用 graphNextLink 承载。
+      final nextToken = listResp.data['nextPageToken'] as String?;
+      return EnvelopePage(
+        envelopes: fetched.envelopes,
+        nextCursor: nextToken == null
+            ? null
+            : PageCursor(graphNextLink: nextToken),
+      );
     } on DioException catch (e) {
       throw MailBackendException('拉取信封失败', cause: e);
     }
@@ -201,13 +209,17 @@ class GmailApiBackend implements MailBackend {
         ),
       );
       final ids = _idsFromList(listResp.data);
-      final added = await _fetchMetadataBatch(ids, folder);
+      final fetched = await _fetchMetadataBatch(ids, folder);
 
-      // 以当前 historyId 作为后续增量游标。
+      // 有信封取元数据失败 → 不固化游标（返回 null token），下次重做全量重试，
+      // 避免把失败的邮件永久漏掉。全部成功才以当前 historyId 作增量起点。
+      if (fetched.failedIds.isNotEmpty) {
+        return SyncResult(added: fetched.envelopes, newToken: null);
+      }
       final profile = await _retry(() => _dio.get('/profile'));
       final hid = profile.data['historyId']?.toString();
       return SyncResult(
-        added: added,
+        added: fetched.envelopes,
         newToken: hid != null ? SyncToken(hid) : null,
       );
     } on DioException catch (e) {
@@ -297,8 +309,8 @@ class GmailApiBackend implements MailBackend {
         pageToken = data['nextPageToken'] as String?;
       } while (pageToken != null);
 
-      final added = toFetch.isEmpty
-          ? <MessageEnvelope>[]
+      final fetched = toFetch.isEmpty
+          ? (envelopes: <MessageEnvelope>[], failedIds: <String>[])
           : await _fetchMetadataBatch(toFetch.toList(), folder);
 
       final updated = <MessageEnvelope>[];
@@ -307,11 +319,18 @@ class GmailApiBackend implements MailBackend {
         updated.add(_flagsOnlyEnvelope(entry.key, entry.value, folder));
       }
 
+      // 有 messageAdded 取元数据失败 → 保留旧 startHistoryId 不前进，下次重放同段
+      // delta 重试（成功的幂等 upsert，失败的再取），避免静默漏邮件造成空洞。
+      // 新邮件不受影响：重放时一并在 toFetch 中重新取到。
+      final tokenValue = fetched.failedIds.isEmpty
+          ? (latestHistoryId ?? startHistoryId.toString())
+          : startHistoryId.toString();
+
       return SyncResult(
-        added: added,
+        added: fetched.envelopes,
         updated: updated,
         removedRefs: removedRefs,
-        newToken: SyncToken(latestHistoryId ?? startHistoryId.toString()),
+        newToken: SyncToken(tokenValue),
       );
     } on DioException catch (e) {
       if (e.response?.statusCode == 404) {
@@ -503,12 +522,16 @@ class GmailApiBackend implements MailBackend {
   }
 
   /// 用 Gmail 批量端点取信封元数据：每 100 封一个 HTTP 请求（而非每封一个）。
-  /// 子响应 429/5xx 的 id 会再批量重试一轮，仍失败的逐封兜底（不再静默丢弃）。
-  Future<List<MessageEnvelope>> _fetchMetadataBatch(
-    List<String> ids,
-    MailboxFolder folder,
-  ) async {
-    if (ids.isEmpty) return const [];
+  /// 子响应 429/5xx 的 id 会再批量重试一轮，仍失败的逐封兜底。
+  ///
+  /// 返回成功取到的信封 + **仍失败的 id**（非 404 的瞬时错误：401/403/429/5xx/网络）。
+  /// 调用方据此决定是否推进同步游标——有失败就不推进，避免静默丢邮件造成空洞。
+  /// 404（邮件确已不存在）不计入失败，直接丢弃。
+  Future<({List<MessageEnvelope> envelopes, List<String> failedIds})>
+  _fetchMetadataBatch(List<String> ids, MailboxFolder folder) async {
+    if (ids.isEmpty) {
+      return (envelopes: <MessageEnvelope>[], failedIds: <String>[]);
+    }
     final out = <MessageEnvelope>[];
     var pending = ids;
     for (var round = 0; round < 2 && pending.isNotEmpty; round++) {
@@ -519,12 +542,17 @@ class GmailApiBackend implements MailBackend {
       }
       pending = failed;
     }
-    // 仍失败的零头：逐封兜底（带重试）。
+    // 仍失败的零头：逐封兜底（带重试）；再失败则计入 failedIds，由上层保留游标重试。
+    final failedIds = <String>[];
     for (final id in pending) {
       final env = await _fetchMetadata(id, folder);
-      if (env != null) out.add(env);
+      if (env != null) {
+        out.add(env);
+      } else {
+        failedIds.add(id);
+      }
     }
-    return out;
+    return (envelopes: out, failedIds: failedIds);
   }
 
   /// 一个批量请求：把 [ids] 拼成 multipart/mixed 子请求，解析每个子响应。

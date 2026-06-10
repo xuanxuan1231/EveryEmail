@@ -1,6 +1,5 @@
 import '../../domain/enums/account_enums.dart';
 import '../../domain/models/mailbox_folder.dart';
-import '../../domain/models/message_envelope.dart';
 import '../../domain/models/message_ref.dart';
 import '../../domain/models/mime_content.dart';
 import 'sync_types.dart';
@@ -31,7 +30,10 @@ abstract interface class MailBackend {
   Future<List<MailboxFolder>> listFolders();
 
   /// 分页拉取信封（按日期/UID 倒序，新→旧）。
-  Future<List<MessageEnvelope>> fetchEnvelopes(
+  ///
+  /// 返回本页信封 + 指向更旧一页的游标（[EnvelopePage.nextCursor]，null 表示到底）。
+  /// 历史回填（“加载更多”）依赖此游标向更旧翻页。
+  Future<EnvelopePage> fetchEnvelopes(
     MailboxFolder folder, {
     PageCursor cursor = PageCursor.start,
     int limit = 50,

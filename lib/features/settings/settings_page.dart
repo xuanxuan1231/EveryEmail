@@ -680,6 +680,31 @@ class DisplaySettingsPage extends ConsumerWidget {
                           );
                         },
                       ),
+                      _SettingsTile(
+                        icon: Icons.forum_outlined,
+                        iconColor: colors.tertiary,
+                        title: '会话视图',
+                        subtitle: '把同一往来的邮件归为一条会话，点开按时间展开',
+                        trailing: Switch(
+                          value: displaySettings.conversationView,
+                          onChanged: (enabled) {
+                            unawaited(
+                              ref
+                                  .read(displaySettingsProvider.notifier)
+                                  .setConversationView(enabled),
+                            );
+                          },
+                        ),
+                        onTap: () {
+                          unawaited(
+                            ref
+                                .read(displaySettingsProvider.notifier)
+                                .setConversationView(
+                                  !displaySettings.conversationView,
+                                ),
+                          );
+                        },
+                      ),
                     ],
                   ),
                   const SizedBox(height: 20),

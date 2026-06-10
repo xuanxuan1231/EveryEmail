@@ -106,6 +106,10 @@ class DisplaySettingsController extends StateNotifier<DisplaySettings> {
     return _set(state.copyWith(showStarButton: visible));
   }
 
+  Future<void> setConversationView(bool enabled) {
+    return _set(state.copyWith(conversationView: enabled));
+  }
+
   Future<void> setPrefetchBodies(bool enabled) {
     return _set(state.copyWith(prefetchBodies: enabled));
   }
@@ -341,14 +345,38 @@ final accountMessagesProvider = StreamProvider.family<List<Message>, String>((
 
 /// 监听某个具体文件夹的邮件（按账户选中具体文件夹时消费）。
 ///
+/// 某文件夹邮件列表当前的显示上限（条数）。滚动到底部时由 UI 递增以“加载更多”。
+/// 切换文件夹各自独立计数；默认 100，与初始同步窗口对齐。
+final folderDisplayLimitProvider = StateProvider.family<int, String>(
+  (ref, folderId) => 100,
+);
+
 /// 用 StreamProvider 而非内联 StreamBuilder：provider 会跨 widget 重建缓存
 /// 当前结果，返回详情页时不会闪一下 loading（重订阅），从而保住列表滚动位置。
 final folderMessagesProvider = StreamProvider.family<List<Message>, String>((
   ref,
   folderId,
 ) {
+  final limit = ref.watch(folderDisplayLimitProvider(folderId));
   return ref
       .watch(databaseProvider)
       .messageDao
-      .watchFolderMessages(folderId, limit: 100);
+      .watchFolderMessages(folderId, limit: limit);
+});
+
+/// 单封邮件的实时标志位（已读/星标等）。
+///
+/// 详情页主流用 `.distinct` 刻意忽略 flag-only 变化以避免重建正文 WebView，
+/// 因此依赖实时 flag 的小部件（标题栏已读/未读图标、星标按钮）改 watch 此 provider，
+/// 仅在标志位真正变化时 tick，且用 `Consumer` 把重建范围限定在图标本身。
+final messageFlagsProvider = StreamProvider.family<int, String>((
+  ref,
+  messageId,
+) {
+  return ref
+      .watch(databaseProvider)
+      .messageDao
+      .watchMessage(messageId)
+      .map((message) => message?.flagsBitmask ?? 0)
+      .distinct();
 });

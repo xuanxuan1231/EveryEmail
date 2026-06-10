@@ -22,7 +22,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -58,6 +58,32 @@ class AppDatabase extends _$AppDatabase {
           'DELETE FROM folders WHERE account_id IN ($gmailAccounts)',
         );
       }
+      // v4：历史回填（“加载更多”）游标列。旧行默认 backfillCursor=null、backfillDone=false。
+      if (from < 4) {
+        await m.addColumn(syncStates, syncStates.backfillCursor);
+        await m.addColumn(syncStates, syncStates.backfillDone);
+      }
+      // v5：修正 IMAP 的会话键（thread_key）。历史上 IMAP 误存了 References 头
+      // 原文（整条链），同一会话每封键不同、无法归并；现改为取链首根 id。这里仅
+      // 针对 IMAP 账户（account_type=2）从既有数据一次性恢复，使会话视图立即可用，
+      // 无需重新同步。Gmail(threadId)/Graph(conversationId) 的键无空格、不受影响。
+      if (from < 5) {
+        const imapAccounts =
+            'SELECT id FROM accounts WHERE account_type = 2';
+        // 1) 含内部空格的 References 链 → 取首个 token（线程根 id）。
+        await customStatement(
+          "UPDATE messages SET thread_key = "
+          "SUBSTR(TRIM(thread_key), 1, INSTR(TRIM(thread_key), ' ') - 1) "
+          "WHERE account_id IN ($imapAccounts) AND TRIM(thread_key) LIKE '% %'",
+        );
+        // 2) 仍为空但有 Message-ID（无 References 的线程根）→ 退回自身 Message-ID，
+        //    使后续回复（其 References 根 = 此 id）能归并到同一会话。
+        await customStatement(
+          'UPDATE messages SET thread_key = message_id_header '
+          'WHERE account_id IN ($imapAccounts) '
+          'AND thread_key IS NULL AND message_id_header IS NOT NULL',
+        );
+      }
     },
     beforeOpen: (details) async {
       // SQLite 默认不启用外键约束；开启后级联删除（账户→文件夹→邮件）才生效。
@@ -79,6 +105,10 @@ class AppDatabase extends _$AppDatabase {
     await customStatement(
       'CREATE INDEX IF NOT EXISTS idx_messages_account_date '
       'ON messages(account_id, date DESC)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_messages_account_thread '
+      'ON messages(account_id, thread_key)',
     );
     await customStatement(
       'CREATE INDEX IF NOT EXISTS idx_folders_type_account '

@@ -90,6 +90,8 @@ class GmailMobileMessageCardContent extends StatelessWidget {
     this.showAccountLabel = false,
     this.displaySettings = DisplaySettings.defaults,
     this.paintBackgroundTint = true,
+    this.conversationCount,
+    this.participantsLabel,
     super.key,
   });
 
@@ -101,6 +103,13 @@ class GmailMobileMessageCardContent extends StatelessWidget {
   final bool showAccountLabel;
   final DisplaySettings displaySettings;
   final bool paintBackgroundTint;
+
+  /// 会话视图：该会话在当前窗口内的邮件数。为 null（或 ≤1）时按单封展示，
+  /// 外观与非会话模式完全一致。>1 时在参与者行尾显示计数徽标。
+  final int? conversationCount;
+
+  /// 会话视图：参与者摘要（已把当前用户显示为「我」）。为 null 时回退到单封发件人。
+  final String? participantsLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -221,18 +230,29 @@ class GmailMobileMessageCardContent extends StatelessWidget {
                         ],
                       ),
                       const SizedBox(height: 4),
-                      Text(
-                        _senderLabel,
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: isRead
-                              ? FontWeight.normal
-                              : FontWeight.w500,
-                          color: secondaryText,
-                          height: 1.35,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              participantsLabel ?? _senderLabel,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: isRead
+                                    ? FontWeight.normal
+                                    : FontWeight.w500,
+                                color: secondaryText,
+                                height: 1.35,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (conversationCount != null &&
+                              conversationCount! > 1) ...[
+                            const SizedBox(width: 6),
+                            _buildCountBadge(theme, isRead),
+                          ],
+                        ],
                       ),
                       if (showPreview || showStar) ...[
                         const SizedBox(height: 2),
@@ -293,8 +313,30 @@ class GmailMobileMessageCardContent extends StatelessWidget {
     );
   }
 
-  Widget _buildAccountIndicator(ThemeData theme) {
-    final color = _toneListAccent(
+  /// 会话计数徽标：参与者行尾的小圆角数字（如「3」），随已读弱化。
+  Widget _buildCountBadge(ThemeData theme, bool isRead) {
+    final colors = theme.colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        color: colors.surfaceContainerHighest.withValues(
+          alpha: isRead ? 0.7 : 1,
+        ),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        '$conversationCount',
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: isRead ? FontWeight.w500 : FontWeight.w700,
+          color: colors.onSurfaceVariant,
+          height: 1.2,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAccountIndicator(ThemeData theme) {    final color = _toneListAccent(
       accountColor ?? theme.colorScheme.outline,
       theme,
     );

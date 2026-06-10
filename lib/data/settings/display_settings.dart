@@ -17,6 +17,7 @@ class DisplaySettings {
     required this.showAttachmentIcon,
     required this.showUnreadIndicator,
     required this.showStarButton,
+    required this.conversationView,
     required this.prefetchBodies,
   });
 
@@ -29,6 +30,7 @@ class DisplaySettings {
     showAttachmentIcon: true,
     showUnreadIndicator: true,
     showStarButton: true,
+    conversationView: true,
     prefetchBodies: true,
   );
 
@@ -40,6 +42,10 @@ class DisplaySettings {
   final bool showAttachmentIcon;
   final bool showUnreadIndicator;
   final bool showStarButton;
+
+  /// 会话视图：把同一往来（同 threadKey）的邮件在列表里折叠成一条会话，
+  /// 点开后整条会话按时间堆叠展示。关闭则回到一封一行。
+  final bool conversationView;
 
   /// 自动预取邮件正文（点开即见内容）。关闭后仅在点击邮件时按需下载。
   final bool prefetchBodies;
@@ -53,6 +59,7 @@ class DisplaySettings {
     bool? showAttachmentIcon,
     bool? showUnreadIndicator,
     bool? showStarButton,
+    bool? conversationView,
     bool? prefetchBodies,
   }) {
     return DisplaySettings(
@@ -64,6 +71,7 @@ class DisplaySettings {
       showAttachmentIcon: showAttachmentIcon ?? this.showAttachmentIcon,
       showUnreadIndicator: showUnreadIndicator ?? this.showUnreadIndicator,
       showStarButton: showStarButton ?? this.showStarButton,
+      conversationView: conversationView ?? this.conversationView,
       prefetchBodies: prefetchBodies ?? this.prefetchBodies,
     );
   }
@@ -80,6 +88,7 @@ class DisplaySettings {
             showAttachmentIcon == other.showAttachmentIcon &&
             showUnreadIndicator == other.showUnreadIndicator &&
             showStarButton == other.showStarButton &&
+            conversationView == other.conversationView &&
             prefetchBodies == other.prefetchBodies;
   }
 
@@ -93,6 +102,7 @@ class DisplaySettings {
     showAttachmentIcon,
     showUnreadIndicator,
     showStarButton,
+    conversationView,
     prefetchBodies,
   );
 }
@@ -109,6 +119,7 @@ class DisplaySettingsStore {
   static const String _showAttachmentIconKey = 'display.showAttachmentIcon';
   static const String _showUnreadIndicatorKey = 'display.showUnreadIndicator';
   static const String _showStarButtonKey = 'display.showStarButton';
+  static const String _conversationViewKey = 'display.conversationView';
   static const String _prefetchBodiesKey = 'display.prefetchBodies';
 
   static Future<DisplaySettings> read() async {
@@ -132,6 +143,9 @@ class DisplaySettingsStore {
       showStarButton:
           prefs.getBool(_showStarButtonKey) ??
           DisplaySettings.defaults.showStarButton,
+      conversationView:
+          prefs.getBool(_conversationViewKey) ??
+          DisplaySettings.defaults.conversationView,
       prefetchBodies:
           prefs.getBool(_prefetchBodiesKey) ??
           DisplaySettings.defaults.prefetchBodies,
@@ -151,6 +165,7 @@ class DisplaySettingsStore {
     await prefs.setBool(_showAttachmentIconKey, settings.showAttachmentIcon);
     await prefs.setBool(_showUnreadIndicatorKey, settings.showUnreadIndicator);
     await prefs.setBool(_showStarButtonKey, settings.showStarButton);
+    await prefs.setBool(_conversationViewKey, settings.conversationView);
     await prefs.setBool(_prefetchBodiesKey, settings.prefetchBodies);
   }
 
