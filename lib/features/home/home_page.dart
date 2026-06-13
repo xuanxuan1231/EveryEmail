@@ -1416,7 +1416,7 @@ class _MessageListState extends ConsumerState<_MessageList> {
           ],
         ),
       ),
-      // 仅具体文件夹视图可「重新同步」：清游标全量重建，补回历史空洞。
+      // 文件夹视图可「重新同步」：真实文件夹直接修复，统一文件夹展开来源修复。
       if (folderId != null)
         const PopupMenuItem<_MessageListMenuAction>(
           value: _MessageListMenuAction.repairFolder,
@@ -2037,9 +2037,10 @@ class _MessageListState extends ConsumerState<_MessageList> {
   /// 重新同步此文件夹（清空同步游标 → 全量重建），用于补回历史「空洞」。
   Future<void> _repairFolder(BuildContext context) async {
     if (_batchInProgress) return;
+    final unifiedFolder = this.unifiedFolder;
     final fid = folderId;
     final aid = accountId;
-    if (fid == null || aid == null) return;
+    if (unifiedFolder == null && (fid == null || aid == null)) return;
 
     setState(() {
       _batchInProgress = true;
@@ -2050,18 +2051,28 @@ class _MessageListState extends ConsumerState<_MessageList> {
 
     try {
       final syncService = ref.read(syncServiceProvider);
-      final account = await syncService.accountConfigFor(aid);
-      final db = ref.read(databaseProvider);
-      final folder = await db.folderDao.getFolder(fid);
-      if (folder != null) {
-        // 重置显示上限与回填进度，让全量结果从头呈现。
-        ref.read(folderDisplayLimitProvider(fid).notifier).state = 100;
-        await syncService.repairFolder(account, folder);
+      String successLabel = '已重新同步此文件夹';
+      if (unifiedFolder != null) {
+        final repairedCount = await syncService.repairUnifiedFolder(
+          unifiedFolder.type,
+        );
+        successLabel = repairedCount == 0
+            ? '没有可重新同步的来源文件夹'
+            : '已重新同步 $repairedCount 个来源文件夹';
+      } else {
+        final account = await syncService.accountConfigFor(aid!);
+        final db = ref.read(databaseProvider);
+        final folder = await db.folderDao.getFolder(fid!);
+        if (folder != null) {
+          // 重置显示上限与回填进度，让全量结果从头呈现。
+          ref.read(folderDisplayLimitProvider(fid).notifier).state = 100;
+          await syncService.repairFolder(account, folder);
+        }
       }
       if (!context.mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('已重新同步此文件夹')));
+      ).showSnackBar(SnackBar(content: Text(successLabel)));
     } catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(

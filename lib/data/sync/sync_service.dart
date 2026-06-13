@@ -438,6 +438,35 @@ class SyncService {
     }, highPriority: true);
   }
 
+  /// 修复统一文件夹：把虚拟统一文件夹展开为所有真实来源文件夹后逐一修复。
+  ///
+  /// 返回成功处理的来源文件夹数量。若部分来源失败，仍会尝试剩余来源，最后抛出汇总错误。
+  Future<int> repairUnifiedFolder(FolderType folderType) async {
+    final sourceFolders = await _db.folderDao.getUnifiedSourceFolders(
+      folderType,
+    );
+    final failures = <Object>[];
+
+    for (final folder in sourceFolders) {
+      try {
+        final account = await accountConfigFor(folder.accountId);
+        await repairFolder(account, folder);
+      } catch (e) {
+        failures.add(e);
+      }
+    }
+
+    if (failures.isNotEmpty) {
+      final first = failures.first;
+      final suffix = failures.length == 1
+          ? '$first'
+          : '$first 等 ${failures.length} 个错误';
+      throw Exception('统一文件夹部分来源重新同步失败: $suffix');
+    }
+
+    return sourceFolders.length;
+  }
+
   /// 历史回填每页拉取的信封数。
   static const int _backfillPageSize = 50;
 

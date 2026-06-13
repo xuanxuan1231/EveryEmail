@@ -301,6 +301,65 @@ void main() {
     expect(draftsSummary.sourceAccountCount, 0);
   });
 
+  test('统一来源文件夹查询只返回已统一化的同类型真实文件夹', () async {
+    await db.accountDao.upsertAccount(
+      AccountsCompanion.insert(
+        id: 'acc-1',
+        email: 'me@example.com',
+        displayName: '我',
+        accountType: AccountType.genericImap,
+        authType: AuthType.password,
+      ),
+    );
+    await db.accountDao.upsertAccount(
+      AccountsCompanion.insert(
+        id: 'acc-2',
+        email: 'work@example.com',
+        displayName: '工作',
+        accountType: AccountType.genericImap,
+        authType: AuthType.password,
+      ),
+    );
+
+    await db.folderDao.upsertFolders([
+      FoldersCompanion.insert(
+        id: 'f-1-inbox',
+        accountId: 'acc-1',
+        remoteId: 'INBOX',
+        displayName: '收件箱',
+        folderType: FolderType.inbox,
+      ),
+      FoldersCompanion.insert(
+        id: 'f-2-inbox',
+        accountId: 'acc-2',
+        remoteId: 'INBOX',
+        displayName: '收件箱',
+        folderType: FolderType.inbox,
+        unified: const Value(false),
+      ),
+      FoldersCompanion.insert(
+        id: 'f-1-sent',
+        accountId: 'acc-1',
+        remoteId: 'Sent',
+        displayName: '已发送',
+        folderType: FolderType.sent,
+      ),
+      FoldersCompanion.insert(
+        id: 'f-1-custom',
+        accountId: 'acc-1',
+        remoteId: 'Work',
+        displayName: 'Work',
+        folderType: FolderType.custom,
+      ),
+    ]);
+
+    final sources = await db.folderDao.getUnifiedSourceFolders(
+      FolderType.inbox,
+    );
+
+    expect(sources.map((folder) => folder.id), ['f-1-inbox']);
+  });
+
   test('关闭统一化后该文件夹不再纳入统一视图', () async {
     await db.accountDao.upsertAccount(
       AccountsCompanion.insert(

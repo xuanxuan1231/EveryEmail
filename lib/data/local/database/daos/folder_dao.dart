@@ -24,6 +24,23 @@ class FolderDao extends DatabaseAccessor<AppDatabase> with _$FolderDaoMixin {
     return (select(folders)..where((t) => t.accountId.equals(accountId))).get();
   }
 
+  /// 获取某个统一文件夹背后的真实来源文件夹。
+  ///
+  /// 统一文件夹本身不是数据库行；需要执行同步类操作时，必须展开为所有开启
+  /// 「统一化」且语义类型相同的真实账户文件夹。
+  Future<List<Folder>> getUnifiedSourceFolders(FolderType folderType) {
+    return (select(folders)
+          ..where(
+            (t) =>
+                t.folderType.equals(folderType.index) & t.unified.equals(true),
+          )
+          ..orderBy([
+            (t) => OrderingTerm.asc(t.accountId),
+            (t) => OrderingTerm.asc(t.sortIndex),
+          ]))
+        .get();
+  }
+
   /// 监听统一账户下固定统一化文件夹的摘要。
   ///
   /// 统一文件夹不是数据库行；这里把所有真实账户中相同语义角色、且开启了
