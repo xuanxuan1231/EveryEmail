@@ -32,6 +32,9 @@ class MessageHtmlView extends StatefulWidget {
     required this.borderColor,
     required this.onOpenUrl,
     this.textStyle,
+    this.senderEmail,
+    this.autoLoadRemoteImages = false,
+    this.onTrustSender,
     super.key,
   });
 
@@ -43,6 +46,16 @@ class MessageHtmlView extends StatefulWidget {
   final Color borderColor;
   final Future<bool> Function(String url) onOpenUrl;
 
+  /// 发件人地址，用于「信任该发件人」提示文案。
+  final String? senderEmail;
+
+  /// 发件人已受信（用户名单或预置名单）：远程图片直接加载，不显示拦截条。
+  final bool autoLoadRemoteImages;
+
+  /// 用户在手动加载图片后选择信任发件人时回调（由调用方持久化）。
+  /// 为 null（或 [senderEmail] 为空）时不提供信任入口。
+  final Future<void> Function()? onTrustSender;
+
   @override
   State<MessageHtmlView> createState() => _MessageHtmlViewState();
 }
@@ -52,8 +65,17 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
   static const String _baseUrl = 'https://everyemail.local/';
   static const String _baseHost = 'everyemail.local';
   static const double _initialHeight = 220;
-  static const double _minHeight = 96;
+  // Floor for the measured body height. The body keeps 12px top/bottom
+  // padding, so an essentially empty document is ~24px; clamp to that (rather
+  // than a tall fixed minimum) so short replies hug their content instead of
+  // being padded out with blank space in the conversation list.
+  static const double _contentFloorHeight = 24;
+  static const double _heightUpdateTolerance = 4;
   static const int _asyncBuildThreshold = 8192;
+  static const Duration _preRenderedRevealDelay = Duration(milliseconds: 80);
+  static const Duration _revealFallbackDelay = Duration(milliseconds: 1200);
+  static const Duration _absoluteRevealDelay = Duration(milliseconds: 3000);
+  static const Duration _revealGrowthDuration = Duration(milliseconds: 240);
   static const List<Duration> _heightProbeDelays = [
     Duration(milliseconds: 120),
     Duration(milliseconds: 600),
@@ -64,9 +86,11 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
   Object? _controllerError;
   final GlobalKey _webViewKey = GlobalKey();
   final List<Timer> _heightTimers = [];
-  Animation<double>? _routeAnimation;
   ScrollPosition? _scrollPosition;
   Timer? _snapshotRefreshTimer;
+  Timer? _preRenderedRevealTimer;
+  Timer? _revealFallbackTimer;
+  Timer? _absoluteRevealTimer;
   MemoryImage? _transitionSnapshotImage;
   DateTime? _lastContextMenuAt;
   double _height = _initialHeight;
@@ -78,40 +102,58 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
   int _progress = 0;
   int _loadSerial = 0;
   bool _pageLoaded = false;
+  bool _documentReady = false;
+  bool _webViewVisible = false;
   bool _heightUpdateScheduled = false;
   bool _controllerCreateScheduled = false;
   bool _snapshotCaptureInFlight = false;
   bool _inPredictiveBackTransition = false;
   bool _hasRemoteImages = false;
   bool _loadRemoteImages = false;
+  bool _trustOfferVisible = false;
   bool _contextMenuOpen = false;
 
   @override
   bool get wantKeepAlive => true;
 
   @override
+  void initState() {
+    super.initState();
+    _loadRemoteImages = widget.autoLoadRemoteImages;
+  }
+
+  @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _bindRouteAnimation(ModalRoute.of(context)?.animation);
     _bindScrollPosition();
-    _ensureControllerCreatedAfterEntrance();
+    _ensureControllerCreated();
   }
 
   @override
   void didUpdateWidget(covariant MessageHtmlView oldWidget) {
     super.didUpdateWidget(oldWidget);
 
+    var needsReload = _shouldReload(oldWidget);
     if (oldWidget.htmlBody != widget.htmlBody) {
       _clearTransitionSnapshot();
       _hasRemoteImages = false;
-      _loadRemoteImages = false;
+      _loadRemoteImages = widget.autoLoadRemoteImages;
+      _trustOfferVisible = false;
+    } else if (widget.autoLoadRemoteImages && !oldWidget.autoLoadRemoteImages) {
+      // 阅读期间发件人被信任（比如会话里另一张同发件人卡片上点了「信任」）：
+      // 提示条不再需要；尚未手动加载过的正文就地重载出图。
+      _trustOfferVisible = false;
+      if (!_loadRemoteImages) {
+        _loadRemoteImages = true;
+        needsReload = needsReload || _hasRemoteImages;
+      }
     }
 
     if (_controller == null && _controllerError == null) {
-      _ensureControllerCreatedAfterEntrance();
+      _ensureControllerCreated();
     }
 
-    if (_shouldReload(oldWidget)) {
+    if (needsReload) {
       unawaited(
         _loadHtml(
           resetHeight: oldWidget.htmlBody != widget.htmlBody,
@@ -124,19 +166,13 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
 
   @override
   void dispose() {
-    _routeAnimation?.removeStatusListener(_handleRouteAnimationStatus);
     _scrollPosition?.removeListener(_handleAncestorScroll);
     _snapshotRefreshTimer?.cancel();
+    _preRenderedRevealTimer?.cancel();
+    _revealFallbackTimer?.cancel();
+    _absoluteRevealTimer?.cancel();
     _cancelHeightTimers();
     super.dispose();
-  }
-
-  void _bindRouteAnimation(Animation<double>? animation) {
-    if (identical(animation, _routeAnimation)) return;
-
-    _routeAnimation?.removeStatusListener(_handleRouteAnimationStatus);
-    _routeAnimation = animation;
-    _routeAnimation?.addStatusListener(_handleRouteAnimationStatus);
   }
 
   void _bindScrollPosition() {
@@ -154,38 +190,21 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
     _scheduleSnapshotRefresh(const Duration(milliseconds: 180));
   }
 
-  void _handleRouteAnimationStatus(AnimationStatus status) {
-    if (status == AnimationStatus.completed) {
-      _ensureControllerCreatedAfterEntrance();
-    }
-  }
-
-  void _ensureControllerCreatedAfterEntrance() {
+  void _ensureControllerCreated() {
     if (_controller != null ||
         _controllerError != null ||
-        _controllerCreateScheduled ||
-        !_routeEntranceComplete) {
+        _controllerCreateScheduled) {
       return;
     }
 
     _controllerCreateScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _controllerCreateScheduled = false;
-      if (!mounted ||
-          _controller != null ||
-          _controllerError != null ||
-          !_routeEntranceComplete) {
+      if (!mounted || _controller != null || _controllerError != null) {
         return;
       }
       _createController();
     });
-  }
-
-  bool get _routeEntranceComplete {
-    final animation = _routeAnimation;
-    return animation == null ||
-        animation.status == AnimationStatus.completed ||
-        animation.value >= 1;
   }
 
   void _createController() {
@@ -219,6 +238,10 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
       onMessageReceived: _handleHeightMessage,
     );
     await controller.addJavaScriptChannel(
+      'EveryEmailReady',
+      onMessageReceived: _handleReadyMessage,
+    );
+    await controller.addJavaScriptChannel(
       'EveryEmailContext',
       onMessageReceived: _handleContextMenuMessage,
     );
@@ -244,6 +267,14 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
     await _tryConfigureWebView(() {
       return controller.setOnJavaScriptTextInputDialog((_) async => '');
     });
+    await _tryConfigureWebView(() async {
+      if (!await controller.supportsSetScrollBarsEnabled()) return;
+      await controller.setVerticalScrollBarEnabled(false);
+      await controller.setHorizontalScrollBarEnabled(false);
+    });
+    await _tryConfigureWebView(
+      () => controller.setOverScrollMode(WebViewOverScrollMode.never),
+    );
 
     final platformController = controller.platform;
     if (platformController is AndroidWebViewController) {
@@ -302,8 +333,13 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
 
     final loadSerial = ++_loadSerial;
     _cancelHeightTimers();
+    _preRenderedRevealTimer?.cancel();
+    _revealFallbackTimer?.cancel();
+    _absoluteRevealTimer?.cancel();
     _clearTransitionSnapshot();
     _pageLoaded = false;
+    _documentReady = false;
+    _webViewVisible = false;
     _pendingHeight = null;
     if (mounted) {
       setState(() {
@@ -311,10 +347,12 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
           _height = _initialHeight;
         }
         _progress = 0;
+        _webViewVisible = false;
       });
     }
 
     final input = _EmailHtmlDocumentInput(
+      loadToken: loadSerial,
       rawHtml: widget.htmlBody,
       fontSize: widget.textStyle?.fontSize ?? 14,
       lineHeight: widget.textStyle?.height ?? 1.45,
@@ -341,6 +379,7 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
     if (!mounted || _controller != controller || loadSerial != _loadSerial) {
       return;
     }
+    _scheduleAbsoluteReveal(loadSerial);
     await controller.loadHtmlString(document.html, baseUrl: _baseUrl);
   }
 
@@ -371,6 +410,9 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
   void _setControllerError(Object error) {
     _controller = null;
     _clearTransitionSnapshot();
+    _preRenderedRevealTimer?.cancel();
+    _revealFallbackTimer?.cancel();
+    _absoluteRevealTimer?.cancel();
     _cancelHeightTimers();
     if (!mounted) {
       _controllerError = error;
@@ -400,13 +442,22 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
       setState(() => _progress = 100);
     }
     _scheduleHeightChecks();
-    _scheduleSnapshotRefresh(const Duration(milliseconds: 260));
+    _scheduleRevealFallback();
+    _schedulePreRenderedReveal();
   }
 
   void _handleHeightMessage(JavaScriptMessage message) {
-    final measuredHeight = _parseJsNumber(message.message);
+    final measuredHeight = _parseCurrentDocumentHeight(message.message);
     if (measuredHeight == null) return;
     _queueHeightUpdate(measuredHeight);
+  }
+
+  void _handleReadyMessage(JavaScriptMessage message) {
+    final measuredHeight = _parseCurrentDocumentHeight(message.message);
+    if (measuredHeight == null) return;
+    _queueHeightUpdate(measuredHeight);
+    _documentReady = true;
+    _schedulePreRenderedReveal();
   }
 
   void _handleContextMenuMessage(JavaScriptMessage message) {
@@ -599,11 +650,38 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
     _showSnackBar(message);
   }
 
+  /// 是否能在手动加载图片后给出「信任该发件人」提示。
+  bool get _canOfferTrust {
+    final senderEmail = widget.senderEmail?.trim();
+    return !widget.autoLoadRemoteImages &&
+        widget.onTrustSender != null &&
+        senderEmail != null &&
+        senderEmail.isNotEmpty;
+  }
+
   Future<void> _enableRemoteImages() async {
     if (_loadRemoteImages) return;
-    setState(() => _loadRemoteImages = true);
+    final offerTrust = _canOfferTrust;
+    setState(() {
+      _loadRemoteImages = true;
+      _trustOfferVisible = offerTrust;
+    });
     await _loadHtml(resetHeight: false);
-    _showSnackBar('已允许加载此邮件的图片');
+    // 提示条本身已说明图片在加载，仅在没有信任入口时用快讯兜底反馈。
+    if (!offerTrust) _showSnackBar('已允许加载此邮件的图片');
+  }
+
+  Future<void> _trustSender() async {
+    final onTrustSender = widget.onTrustSender;
+    if (onTrustSender == null) return;
+    setState(() => _trustOfferVisible = false);
+    try {
+      await onTrustSender();
+      _showSnackBar('已信任该发件人，其邮件中的图片将自动加载');
+    } catch (_) {
+      if (mounted) setState(() => _trustOfferVisible = true);
+      _showSnackBar('保存信任发件人失败，请重试');
+    }
   }
 
   void _showSnackBar(String message) {
@@ -638,18 +716,23 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
     try {
       final result = await controller.runJavaScriptReturningResult('''
 (() => {
+  if (typeof window.__EveryEmailMeasureHeight === 'function') {
+    return window.__EveryEmailMeasureHeight();
+  }
   const body = document.body;
-  const html = document.documentElement;
+  const viewport = document.getElementById('email-viewport');
   const root = document.getElementById('email-root');
+  const bodyStyle = body ? window.getComputedStyle(body) : null;
+  const paddingTop = bodyStyle ? parseFloat(bodyStyle.paddingTop) || 0 : 0;
+  const paddingBottom = bodyStyle ? parseFloat(bodyStyle.paddingBottom) || 0 : 0;
+  const viewportRect = viewport ? viewport.getBoundingClientRect() : null;
+  const rootRect = root ? root.getBoundingClientRect() : null;
   return Math.ceil(Math.max(
-    body ? body.scrollHeight : 0,
-    body ? body.offsetHeight : 0,
-    html ? html.clientHeight : 0,
-    html ? html.scrollHeight : 0,
-    html ? html.offsetHeight : 0,
-    root ? root.scrollHeight : 0,
+    viewportRect ? viewportRect.height : 0,
+    viewport ? viewport.offsetHeight : 0,
+    rootRect ? rootRect.height : 0,
     root ? root.offsetHeight : 0
-  ));
+  ) + paddingTop + paddingBottom);
 })()
 ''');
       final measuredHeight = _parseJsNumber(result);
@@ -664,11 +747,11 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
   void _queueHeightUpdate(num measuredHeight) {
     if (measuredHeight <= 0 || !mounted) return;
 
-    final nextHeight = measuredHeight < _minHeight
-        ? _minHeight
+    final nextHeight = measuredHeight < _contentFloorHeight
+        ? _contentFloorHeight
         : measuredHeight.toDouble();
     final comparisonHeight = _pendingHeight ?? _height;
-    if ((nextHeight - comparisonHeight).abs() < 2) return;
+    if ((nextHeight - comparisonHeight).abs() < _heightUpdateTolerance) return;
 
     _pendingHeight = nextHeight;
     if (_heightUpdateScheduled) return;
@@ -679,8 +762,9 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
       final pendingHeight = _pendingHeight;
       _pendingHeight = null;
       if (!mounted || pendingHeight == null) return;
-      if ((pendingHeight - _height).abs() < 2) return;
+      if ((pendingHeight - _height).abs() < _heightUpdateTolerance) return;
       setState(() => _height = pendingHeight);
+      _schedulePreRenderedReveal();
       _scheduleSnapshotRefresh(const Duration(milliseconds: 160));
     });
   }
@@ -690,6 +774,17 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
     final text = value?.toString().replaceAll('"', '').trim();
     if (text == null || text.isEmpty) return null;
     return double.tryParse(text);
+  }
+
+  double? _parseCurrentDocumentHeight(String message) {
+    final separator = message.indexOf(':');
+    if (separator <= 0) {
+      return _parseJsNumber(message);
+    }
+
+    final token = int.tryParse(message.substring(0, separator));
+    if (token != _loadSerial) return null;
+    return _parseJsNumber(message.substring(separator + 1));
   }
 
   void _scheduleSnapshotRefresh(Duration delay) {
@@ -704,6 +799,59 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
     _snapshotRefreshTimer = Timer(delay, () {
       unawaited(_captureVisibleWebViewSnapshot());
     });
+  }
+
+  void _schedulePreRenderedReveal() {
+    if (!mounted || _webViewVisible || !_pageLoaded || !_documentReady) {
+      return;
+    }
+
+    _preRenderedRevealTimer?.cancel();
+    _preRenderedRevealTimer = Timer(_preRenderedRevealDelay, _revealNow);
+  }
+
+  void _scheduleRevealFallback() {
+    if (_webViewVisible || _documentReady) return;
+
+    _revealFallbackTimer?.cancel();
+    _revealFallbackTimer = Timer(_revealFallbackDelay, () {
+      if (!mounted || _webViewVisible || !_pageLoaded) return;
+      // The in-page readiness signal never arrived (a script error in the
+      // document, a channel hiccup, or a platform quirk). Reveal anyway: a
+      // height probe has almost certainly measured the body by now, and it must
+      // never be left stuck permanently behind the skeleton.
+      _documentReady = true;
+      _revealNow();
+    });
+  }
+
+  void _scheduleAbsoluteReveal(int loadSerial) {
+    _absoluteRevealTimer?.cancel();
+    _absoluteRevealTimer = Timer(_absoluteRevealDelay, () {
+      if (!mounted || _webViewVisible || loadSerial != _loadSerial) return;
+      // Last-resort safety net for the case the pageFinished callback itself
+      // never fires (a dropped platform callback), which would otherwise leave
+      // _scheduleRevealFallback unarmed and the body stuck forever. Local HTML
+      // has almost certainly finished loading by now, so force the document
+      // ready and reveal — scrollbars are disabled, there is no other way out.
+      _pageLoaded = true;
+      _documentReady = true;
+      _revealNow();
+    });
+  }
+
+  void _revealNow() {
+    if (!mounted || _webViewVisible || !_pageLoaded) return;
+
+    _preRenderedRevealTimer?.cancel();
+    _revealFallbackTimer?.cancel();
+    _absoluteRevealTimer?.cancel();
+    // The WebView has been measured and fully painted behind the skeleton, so
+    // flip it visible in a single step. _buildFrame's AnimatedSize turns the
+    // placeholder -> content height delta into one smooth growth instead of the
+    // height ratcheting up probe by probe.
+    setState(() => _webViewVisible = true);
+    _scheduleSnapshotRefresh(const Duration(milliseconds: 160));
   }
 
   void _ensureTransitionSnapshotScheduled() {
@@ -818,6 +966,11 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
     }
 
     final webView = _buildWebView(controller);
+    final loadedContent = _buildLoadedContent(webView);
+    if (!_webViewVisible) {
+      return _buildFrame(child: _buildPreRenderedPlaceholder(loadedContent));
+    }
+
     if (inPredictiveBackTransition) {
       _ensureTransitionSnapshotScheduled();
       final snapshot = _buildTransitionSnapshot();
@@ -834,24 +987,52 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
         );
       }
 
-      return _buildFrame(child: _buildLoadedContent(webView));
+      return _buildFrame(child: loadedContent);
     }
 
     return _buildFrame(
-      child: _buildLoadedContent(
-        Stack(
-          children: [
-            webView,
-            if (_progress < 100)
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                child: LinearProgressIndicator(
-                  minHeight: 2,
-                  value: _progress <= 0 ? null : _progress / 100,
-                ),
+      child: Stack(
+        children: [
+          loadedContent,
+          if (_progress < 100)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: LinearProgressIndicator(
+                minHeight: 2,
+                value: _progress <= 0 ? null : _progress / 100,
               ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPreRenderedPlaceholder(Widget content) {
+    // Keep the live (still hidden) WebView mounted at its measured height so it
+    // is fully painted by the time we reveal it, but clip it to a stable
+    // placeholder height. Without this clamp the surrounding conversation list
+    // would grow bit by bit as the height probes settle; instead the single
+    // growth to the final height happens once, animated, in _buildFrame when
+    // [_webViewVisible] flips.
+    return SizedBox(
+      height: _initialHeight,
+      child: ClipRect(
+        child: Stack(
+          children: [
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: IgnorePointer(child: content),
+            ),
+            Positioned.fill(
+              child: ColoredBox(
+                color: widget.backgroundColor,
+                child: _buildDeferredPlaceholder(),
+              ),
+            ),
           ],
         ),
       ),
@@ -859,14 +1040,21 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
   }
 
   Widget _buildLoadedContent(Widget webViewContent) {
-    if (!_hasRemoteImages || _loadRemoteImages) {
-      return webViewContent;
+    if (_hasRemoteImages && !_loadRemoteImages) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [_buildRemoteImagePrompt(), webViewContent],
+      );
     }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [_buildRemoteImagePrompt(), webViewContent],
-    );
+    if (_trustOfferVisible) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [_buildTrustSenderOffer(), webViewContent],
+      );
+    }
+
+    return webViewContent;
   }
 
   Widget _buildRemoteImagePrompt() {
@@ -893,6 +1081,46 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
             TextButton(
               onPressed: () => unawaited(_enableRemoteImages()),
               child: const Text('加载图片'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 手动加载图片后的跟进提示：可一键信任该发件人，以后自动加载。
+  Widget _buildTrustSenderOffer() {
+    final theme = Theme.of(context);
+    return Material(
+      color: theme.colorScheme.surfaceContainerHighest,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 4, 10),
+        child: Row(
+          children: [
+            Icon(
+              Icons.verified_user_outlined,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                '信任 ${widget.senderEmail?.trim()}？其邮件中的图片将自动加载',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+            TextButton(
+              onPressed: () => unawaited(_trustSender()),
+              child: const Text('信任'),
+            ),
+            IconButton(
+              icon: const Icon(Icons.close),
+              iconSize: 18,
+              tooltip: '关闭',
+              onPressed: () => setState(() => _trustOfferVisible = false),
             ),
           ],
         ),
@@ -1035,7 +1263,12 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
     return RepaintBoundary(
       child: ColoredBox(
         color: widget.backgroundColor,
-        child: SizedBox(width: double.infinity, child: content),
+        child: AnimatedSize(
+          duration: _revealGrowthDuration,
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.topCenter,
+          child: SizedBox(width: double.infinity, child: content),
+        ),
       ),
     );
   }
@@ -1045,6 +1278,7 @@ _PreparedEmailHtmlDocument _buildEmailHtmlDocument(
   _EmailHtmlDocumentInput input,
 ) {
   return _EmailHtmlDocument(
+    loadToken: input.loadToken,
     rawHtml: input.rawHtml,
     fontSize: input.fontSize,
     lineHeight: input.lineHeight,
@@ -1061,16 +1295,21 @@ _PreparedEmailHtmlDocument _buildEmailHtmlDocument(
 String buildSanitizedEmailHtmlForTesting(
   String rawHtml, {
   bool loadRemoteImages = false,
+  int backgroundColorValue = 0xffffffff,
+  int foregroundColorValue = 0xff000000,
+  int linkColorValue = 0xff1a73e8,
+  int borderColorValue = 0xffdadce0,
 }) {
   return _EmailHtmlDocument(
+    loadToken: 0,
     rawHtml: rawHtml,
     fontSize: 14,
     lineHeight: 1.45,
     fontWeight: 400,
-    backgroundColorValue: 0xffffffff,
-    foregroundColorValue: 0xff000000,
-    linkColorValue: 0xff1a73e8,
-    borderColorValue: 0xffdadce0,
+    backgroundColorValue: backgroundColorValue,
+    foregroundColorValue: foregroundColorValue,
+    linkColorValue: linkColorValue,
+    borderColorValue: borderColorValue,
     loadRemoteImages: loadRemoteImages,
   ).build().html;
 }
@@ -1169,6 +1408,7 @@ class _EmailHtmlContextAction {
 @immutable
 class _EmailHtmlDocumentInput {
   const _EmailHtmlDocumentInput({
+    required this.loadToken,
     required this.rawHtml,
     required this.fontSize,
     required this.lineHeight,
@@ -1180,6 +1420,7 @@ class _EmailHtmlDocumentInput {
     required this.loadRemoteImages,
   });
 
+  final int loadToken;
   final String rawHtml;
   final double fontSize;
   final double lineHeight;
@@ -1193,6 +1434,7 @@ class _EmailHtmlDocumentInput {
 
 class _EmailHtmlDocument {
   const _EmailHtmlDocument({
+    required this.loadToken,
     required this.rawHtml,
     required this.fontSize,
     required this.lineHeight,
@@ -1243,7 +1485,34 @@ class _EmailHtmlDocument {
     r'position\s*:\s*(?:fixed|sticky)\s*;?',
     caseSensitive: false,
   );
+  // Length tokens used to decide whether a blocked image declares a reservable
+  // box (see [_isReservableLength]). Zero is rejected by the numeric check, not
+  // these patterns.
+  static final RegExp _reservableLength = RegExp(
+    r'^\d+(?:\.\d+)?(?:px|em|rem|ex|ch|pt|pc|cm|mm|in|vh|vw|vmin|vmax)?$',
+  );
+  static final RegExp _reservablePercent = RegExp(r'^\d+(?:\.\d+)?%$');
+  static final RegExp _leadingNumber = RegExp(r'^\d+(?:\.\d+)?');
   static const int _scriptNonceByteCount = 16;
+  // Standard light-theme link blue. In dark mode the document is rendered with
+  // a light palette and flipped by an invert+hue-rotate filter, which turns
+  // this into a readable bright blue while keeping the hue.
+  static const int _lightLinkValue = 0xff1a73e8;
+
+  // Signals that an email ships its own dark styling, so we honor it (render
+  // natively dark) instead of applying the invert filter.
+  static final RegExp _prefersColorSchemeDark = RegExp(
+    r'prefers-color-scheme\s*:\s*dark',
+    caseSensitive: false,
+  );
+  static final RegExp _colorSchemeDeclaresDark = RegExp(
+    r'color-scheme\s*:\s*[^;{}]*dark',
+    caseSensitive: false,
+  );
+  static final RegExp _metaColorSchemeDark = RegExp(
+    r'<meta[^>]*color-scheme[^>]*dark',
+    caseSensitive: false,
+  );
 
   static const Set<String> _blockedTags = {
     'applet',
@@ -1296,6 +1565,7 @@ class _EmailHtmlDocument {
     'srcdoc',
   };
 
+  final int loadToken;
   final String rawHtml;
   final double fontSize;
   final double lineHeight;
@@ -1321,10 +1591,43 @@ class _EmailHtmlDocument {
         ? _escapeHtml(rawHtml)
         : bodyHtml;
 
-    final background = _cssColor(backgroundColorValue);
-    final foreground = _cssColor(foregroundColorValue);
-    final link = _cssColor(linkColorValue);
-    final border = _cssColor(borderColorValue);
+    final isDark = _isDarkColor(backgroundColorValue);
+    // Gmail-style policy: if the email ships its own dark styling (a
+    // prefers-color-scheme:dark block, a color-scheme:dark declaration, or a
+    // color-scheme meta), trust it and render natively dark — no inversion.
+    // Only legacy light-only emails fall back to the CSS invert+hue-rotate
+    // filter. On that filtered path the document is rendered with a light,
+    // pre-compensated palette so the filter lands back on the app's dark colors
+    // (see the [data-ee-invert] rules), turning genuine light backgrounds dark
+    // instead of letting them glare against the dark UI.
+    final emailDeclaresDark = isDark && _declaresDarkColorScheme();
+    final useInvertFilter = isDark && !emailDeclaresDark;
+    final invertAttr = useInvertFilter ? ' data-ee-invert="on"' : '';
+    // color-scheme follows the rendered palette: dark only when we honor the
+    // email's own dark styling (so its prefers-color-scheme:dark rules match and
+    // UA defaults darken); light when rendering light or pre-inverted-for-filter.
+    final colorSchemeName = emailDeclaresDark ? 'dark' : 'light';
+    // On the filter path our own surface/text/border must land EXACTLY on the
+    // app palette so the body is seamless with the Flutter card. The filter is
+    // invert(1) THEN hue-rotate(180deg); inverting alone (the obvious choice)
+    // ignores the hue-rotate, which shifts a tinted surface to the opposite hue
+    // — e.g. the indigo-tinted dark card #302f37 came out warm #303129 (blue
+    // channel off by 14), a visible gray seam against the card. Pre-image under
+    // the full filter (invert∘hue-rotate, both self-inverse) lands it dead on.
+    final background = _cssColor(
+      useInvertFilter
+          ? _preInvertForFilter(backgroundColorValue)
+          : backgroundColorValue,
+    );
+    final foreground = _cssColor(
+      useInvertFilter
+          ? _preInvertForFilter(foregroundColorValue)
+          : foregroundColorValue,
+    );
+    final link = _cssColor(useInvertFilter ? _lightLinkValue : linkColorValue);
+    final border = _cssColor(
+      useInvertFilter ? _preInvertForFilter(borderColorValue) : borderColorValue,
+    );
     final scriptNonce = _createCspNonce();
     final imageSources = loadRemoteImages
         ? 'data: cid: http: https:'
@@ -1333,23 +1636,35 @@ class _EmailHtmlDocument {
     final html =
         '''
 <!doctype html>
-<html>
+<html$invertAttr>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="$colorSchemeName">
+  <meta name="supported-color-schemes" content="light dark">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; child-src 'none'; connect-src 'none'; font-src 'none'; form-action 'none'; frame-src 'none'; img-src $imageSources; media-src 'none'; object-src 'none'; script-src 'nonce-$scriptNonce'; style-src 'unsafe-inline'">
   <style>
+    :root {
+      color-scheme: $colorSchemeName;
+      --ee-bg: $background;
+      --ee-fg: $foreground;
+      --ee-link: $link;
+      --ee-border: $border;
+    }
+
     html,
     body {
       width: 100%;
       max-width: 100%;
       min-width: 0;
-      min-height: 100%;
+      min-height: 0;
       margin: 0;
-      background: $background;
-      color: $foreground;
-      overflow-x: hidden;
-      overflow-y: hidden;
+      background: var(--ee-bg);
+      color: var(--ee-fg);
+      overflow: hidden;
+      overscroll-behavior: none;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
       -webkit-text-size-adjust: 100%;
     }
 
@@ -1366,9 +1681,16 @@ class _EmailHtmlDocument {
       overflow-wrap: anywhere;
     }
 
+    html::-webkit-scrollbar,
+    body::-webkit-scrollbar {
+      width: 0;
+      height: 0;
+      display: none;
+    }
+
     a {
-      color: $link;
-      text-decoration-color: color-mix(in srgb, $link 45%, transparent);
+      color: var(--ee-link);
+      text-decoration-color: color-mix(in srgb, var(--ee-link) 45%, transparent);
     }
 
     pre,
@@ -1385,89 +1707,101 @@ class _EmailHtmlDocument {
   </style>
   $preservedHeadStyles
   <style>
-    *,
-    *::before,
-    *::after {
+    html,
+    body {
+      background: var(--ee-bg) !important;
+      color: var(--ee-fg) !important;
+      overflow: hidden !important;
+      /* Contain any horizontal padding (ours, or one the email sets on body via
+         a preserved <style>) inside the 100% width. Without this the body is
+         content-box, so e.g. an email's `body{padding:10px}` adds 10px OUTSIDE
+         the forced width:100% — shoving content right and clipping it against
+         the WebView's right edge (a real browser dodges this: its body width is
+         auto, not 100%). */
+      box-sizing: border-box !important;
+    }
+
+    #email-viewport,
+    #email-root {
       box-sizing: border-box;
+    }
+
+    #email-viewport {
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      overflow: hidden;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+      background: transparent;
+    }
+
+    #email-viewport::-webkit-scrollbar {
+      width: 0;
+      height: 0;
+      display: none;
     }
 
     #email-root {
       display: block;
-      width: 100% !important;
-      max-width: 100% !important;
-      min-width: 0 !important;
-      overflow-x: hidden;
+      width: auto;
+      max-width: none;
+      min-width: 0;
+      overflow: visible;
+      color: inherit;
+      transform-origin: top left;
     }
 
-    #email-root *,
-    #email-root *::before,
-    #email-root *::after {
-      max-width: 100% !important;
-      min-width: 0 !important;
+    #email-root.ee-scaled {
+      width: var(--ee-layout-width) !important;
+      transform: scale(var(--ee-scale));
     }
 
-    img,
-    svg,
-    video,
-    canvas {
-      max-width: 100% !important;
-      height: auto !important;
+    #email-root a:not([style*="color" i]) {
+      color: var(--ee-link);
     }
 
+    /* Cap every email image — blocked placeholder and loaded image alike — to
+       its containing block so neither overflows a fluid container. max-width
+       is container-relative, so fixed-width table layouts (which scale as a
+       whole) are untouched. Height is intentionally left to the image's own
+       attributes/CSS so a declared height is preserved in both states. */
+    #email-root img {
+      max-width: 100%;
+    }
+
+    /* Blocked image placeholder: paint-only hint. Its box comes entirely from
+       the shared #email-root img rule above plus the image's own declared size,
+       so the placeholder occupies the same box the image will once loaded. */
     img[data-ee-remote-src]:not([src]) {
-      display: inline-block;
-      min-width: 112px;
-      min-height: 64px;
-      border: 1px dashed $border;
       border-radius: 8px;
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ee-border) 55%, transparent);
       background:
-        linear-gradient(135deg, color-mix(in srgb, $border 22%, transparent) 25%, transparent 25%) 0 0 / 16px 16px,
-        color-mix(in srgb, $border 10%, transparent);
+        linear-gradient(135deg, color-mix(in srgb, var(--ee-border) 22%, transparent) 25%, transparent 25%) 0 0 / 16px 16px,
+        color-mix(in srgb, var(--ee-border) 10%, transparent);
       object-fit: contain;
     }
 
-    table {
-      width: auto !important;
-      max-width: 100% !important;
-      min-width: 0 !important;
-      border-collapse: collapse;
+    /* Keep a placeholder visible and long-pressable to "load images", but floor
+       ONLY the axis the image does not size itself on. Flooring an axis the
+       image already declares (e.g. a width="24" icon) would inflate horizontal
+       table rows and shrink the whole email down while images are blocked —
+       data-ee-w / data-ee-h are set by the sanitizer per declared axis. */
+    img[data-ee-remote-src]:not([data-ee-w]):not([src]) {
+      min-width: 112px;
     }
 
-    table[width],
-    table[style*="width" i],
-    table[style*="min-width" i] {
-      width: 100% !important;
+    img[data-ee-remote-src]:not([data-ee-h]):not([src]) {
+      min-height: 64px;
     }
 
-    col,
-    colgroup {
-      width: auto !important;
-      max-width: 100% !important;
-      min-width: 0 !important;
-    }
-
-    td,
-    th {
-      width: auto !important;
-      max-width: 100% !important;
-      min-width: 0 !important;
-      overflow-wrap: anywhere;
-    }
-
-    [nowrap],
-    [style*="white-space" i] {
-      white-space: normal !important;
-    }
-
-    [width],
-    [style*="width" i],
-    [style*="min-width" i] {
-      max-width: 100% !important;
-      min-width: 0 !important;
+    blockquote {
+      border-left-color: var(--ee-border);
     }
 
     html,
     body,
+    #email-viewport,
     #email-root,
     #email-root * {
       -webkit-touch-callout: default !important;
@@ -1475,12 +1809,21 @@ class _EmailHtmlDocument {
       user-select: text !important;
     }
 
-    #email-root > :first-child {
-      margin-top: 0 !important;
+    html[data-ee-invert] body {
+      /* The document is rendered with a light palette; flip the whole body to
+         dark in one pass. invert reverses lightness, hue-rotate(180deg) brings
+         hues back so brand colors survive and only light/dark swaps. Genuine
+         light backgrounds in the email become dark instead of glaring. */
+      filter: invert(1) hue-rotate(180deg);
     }
 
-    #email-root > :last-child {
-      margin-bottom: 0 !important;
+    html[data-ee-invert] #email-root img,
+    html[data-ee-invert] #email-root svg,
+    html[data-ee-invert] #email-root video,
+    html[data-ee-invert] #email-root canvas,
+    html[data-ee-invert] #email-root picture {
+      /* Undo the body inversion for real media so photos render normally. */
+      filter: invert(1) hue-rotate(180deg);
     }
   </style>
   <script nonce="$scriptNonce">
@@ -1575,94 +1918,149 @@ class _EmailHtmlDocument {
         postContextTarget(target);
       });
 
-      const constrainWidth = () => {
-        const root = document.getElementById('email-root');
-        if (!root) return;
+      const getLayoutNodes = () => {
+        return {
+          body: document.body,
+          viewport: document.getElementById('email-viewport'),
+          root: document.getElementById('email-root')
+        };
+      };
 
-        const viewportWidth = Math.max(
-          root.clientWidth || 0,
-          document.documentElement ? document.documentElement.clientWidth : 0,
-          window.innerWidth || 0
-        );
-        if (viewportWidth <= 0) return;
+      const parsePixels = (value) => {
+        const parsed = Number.parseFloat(value);
+        return Number.isFinite(parsed) ? parsed : 0;
+      };
+
+      const resetFit = (root) => {
+        root.classList.remove('ee-scaled');
+        root.style.removeProperty('--ee-layout-width');
+        root.style.removeProperty('--ee-scale');
+      };
+
+      const measureNaturalWidth = (root) => {
+        const rootRect = root.getBoundingClientRect();
+        const rootLeft = rootRect.left;
+        let width = Math.max(root.scrollWidth, root.offsetWidth, rootRect.width);
 
         root
           .querySelectorAll(
-            'table, col, colgroup, td, th, img, svg, video, canvas, pre, [width], [nowrap], [style]'
+            'table, img, svg, video, canvas, pre, blockquote, [width], [style]'
           )
           .forEach((element) => {
-            const tagName = element.tagName;
-            const styleText = (element.getAttribute('style') || '').toLowerCase();
-            const constrainsWidth =
-              element.hasAttribute('width') ||
-              element.hasAttribute('nowrap') ||
-              styleText.includes('width') ||
-              styleText.includes('min-width') ||
-              styleText.includes('white-space') ||
-              element.scrollWidth > viewportWidth;
-
-            if (!constrainsWidth && tagName !== 'TABLE') return;
-
-            element.style.setProperty('max-width', '100%', 'important');
-            element.style.setProperty('min-width', '0', 'important');
-
-            if (tagName === 'TABLE') {
-              element.style.setProperty('width', '100%', 'important');
-            } else if (
-              tagName === 'TD' ||
-              tagName === 'TH' ||
-              tagName === 'COL' ||
-              tagName === 'COLGROUP' ||
-              element.scrollWidth > viewportWidth
-            ) {
-              element.style.setProperty('width', 'auto', 'important');
+            const rect = element.getBoundingClientRect();
+            if (rect.width > 0) {
+              width = Math.max(width, rect.right - rootLeft);
             }
-
-            if (
-              element.hasAttribute('nowrap') ||
-              styleText.includes('white-space')
-            ) {
-              element.style.setProperty('white-space', 'normal', 'important');
+            if (element.scrollWidth > 0) {
+              const offsetLeft = Math.max(0, rect.left - rootLeft);
+              width = Math.max(width, offsetLeft + element.scrollWidth);
             }
           });
+
+        return Math.ceil(width);
       };
-      const measure = () => {
-        const body = document.body;
-        const html = document.documentElement;
-        const root = document.getElementById('email-root');
-        return Math.ceil(Math.max(
-          body ? body.scrollHeight : 0,
-          body ? body.offsetHeight : 0,
-          html ? html.clientHeight : 0,
-          html ? html.scrollHeight : 0,
-          html ? html.offsetHeight : 0,
-          root ? root.scrollHeight : 0,
-          root ? root.offsetHeight : 0
-        ));
-      };
-      const postHeight = () => {
-        constrainWidth();
-        const height = measure();
-        if (height > 0 && window.EveryEmailHeight) {
-          window.EveryEmailHeight.postMessage(String(height));
+
+      const fitContent = () => {
+        const { viewport, root } = getLayoutNodes();
+        if (!viewport || !root) {
+          return { height: 0, scaled: false };
         }
+
+        resetFit(root);
+        const viewportWidth = Math.floor(
+          viewport.clientWidth ||
+          document.documentElement.clientWidth ||
+          window.innerWidth ||
+          0
+        );
+        if (viewportWidth <= 0) {
+          return { height: 0, scaled: false };
+        }
+
+        const naturalWidth = Math.max(viewportWidth, measureNaturalWidth(root));
+        const shouldScale = naturalWidth > viewportWidth + 2;
+        if (shouldScale) {
+          const scale = Math.min(1, viewportWidth / naturalWidth);
+          root.style.setProperty('--ee-layout-width', naturalWidth + 'px');
+          root.style.setProperty('--ee-scale', String(scale));
+          root.classList.add('ee-scaled');
+
+          const scaledHeight = Math.ceil(root.getBoundingClientRect().height);
+          viewport.style.height = scaledHeight + 'px';
+          return { height: scaledHeight, scaled: true };
+        }
+
+        viewport.style.removeProperty('height');
+        const rootRect = root.getBoundingClientRect();
+        const height = Math.ceil(Math.max(
+          viewport.offsetHeight,
+          viewport.scrollHeight,
+          root.offsetHeight,
+          root.scrollHeight,
+          rootRect.height
+        ));
+        return { height, scaled: false };
+      };
+
+      const measure = () => {
+        const { body } = getLayoutNodes();
+        if (!body) return 0;
+
+        const bodyStyle = window.getComputedStyle(body);
+        const paddingTop = parsePixels(bodyStyle.paddingTop);
+        const paddingBottom = parsePixels(bodyStyle.paddingBottom);
+        const contentBox = fitContent();
+        return Math.ceil(contentBox.height + paddingTop + paddingBottom);
+      };
+
+      window.__EveryEmailMeasureHeight = measure;
+
+      let lastPostedHeight = 0;
+      let loadComplete = document.readyState === 'complete';
+      let readyPosted = false;
+      const documentToken = '$loadToken';
+      const postHeight = () => {
+        const height = measure();
+        if (
+          height > 0 &&
+          window.EveryEmailHeight &&
+          Math.abs(height - lastPostedHeight) >= 1
+        ) {
+          lastPostedHeight = height;
+          window.EveryEmailHeight.postMessage(documentToken + ':' + String(height));
+        }
+      };
+      const postReady = () => {
+        if (!loadComplete || readyPosted || !window.EveryEmailReady) return;
+        const height = measure();
+        if (height <= 0) return;
+        readyPosted = true;
+        window.EveryEmailReady.postMessage(documentToken + ':' + String(height));
       };
       const schedule = () => {
         requestAnimationFrame(() => {
           postHeight();
-          requestAnimationFrame(postHeight);
+          requestAnimationFrame(() => {
+            postHeight();
+            postReady();
+          });
         });
       };
-      window.addEventListener('load', schedule);
+      window.addEventListener('load', () => {
+        loadComplete = true;
+        schedule();
+      });
       window.addEventListener('resize', schedule);
       document.addEventListener('DOMContentLoaded', () => {
         schedule();
         if ('ResizeObserver' in window) {
-          const observer = new ResizeObserver(schedule);
-          observer.observe(document.documentElement);
-          if (document.body) observer.observe(document.body);
           const root = document.getElementById('email-root');
-          if (root) observer.observe(root);
+          // Observe only the content node, never documentElement/body: those
+          // track the Flutter-set frame height and observing them is what made
+          // the height feed back on itself. #email-root is content-driven, so a
+          // height-only frame change cannot retrigger it, while genuine late
+          // reflow (web font swap, image decode, details toggle) still does.
+          if (root) new ResizeObserver(schedule).observe(root);
         }
       });
       document.addEventListener('load', (event) => {
@@ -1673,7 +2071,9 @@ class _EmailHtmlDocument {
   </script>
 </head>
 <body>
-  <div id="email-root">$safeBodyHtml</div>
+  <div id="email-viewport">
+    <div id="email-root">$safeBodyHtml</div>
+  </div>
 </body>
 </html>
 ''';
@@ -1773,6 +2173,16 @@ class _EmailHtmlDocument {
       element.attributes['referrerpolicy'] = 'no-referrer';
       element.attributes['decoding'] = 'async';
       element.attributes['loading'] = 'lazy';
+      // Blocked placeholder: mark each axis the image already sizes itself on so
+      // the min-width/min-height floors apply ONLY to the unknown axis. A small
+      // icon that declares width="24" but no height must keep its 24px width —
+      // flooring it to 112px would inflate horizontal table rows and scale the
+      // whole email down while remote images are blocked.
+      if (element.attributes.containsKey('data-ee-remote-src') &&
+          !element.attributes.containsKey('src')) {
+        if (_hasUsableWidth(element)) element.attributes['data-ee-w'] = '';
+        if (_hasUsableHeight(element)) element.attributes['data-ee-h'] = '';
+      }
     }
 
     if (tag == 'a') {
@@ -1865,6 +2275,69 @@ class _EmailHtmlDocument {
     return null;
   }
 
+  /// Whether a blocked image declares a width we can reserve, so its placeholder
+  /// keeps that width instead of being floored to the dimensionless min-width.
+  bool _hasUsableWidth(dom.Element element) {
+    return _isReservableLength(element.attributes['width'], allowPercent: true) ||
+        _styleDeclaresLength(
+          element.attributes['style'],
+          'width',
+          allowPercent: true,
+        );
+  }
+
+  /// Whether a blocked image declares a height we can reserve. A positive height
+  /// attribute counts even with inline `height:auto`, since paired with a width
+  /// attribute the browser maps it to an aspect-ratio that reserves the box.
+  bool _hasUsableHeight(dom.Element element) {
+    return _isReservableLength(element.attributes['height'], allowPercent: false) ||
+        _styleDeclaresLength(
+          element.attributes['style'],
+          'height',
+          allowPercent: false,
+        );
+  }
+
+  bool _styleDeclaresLength(
+    String? style,
+    String property, {
+    required bool allowPercent,
+  }) {
+    if (style == null || style.isEmpty) return false;
+    for (final declaration in style.split(';')) {
+      final separator = declaration.indexOf(':');
+      if (separator <= 0) continue;
+      final name = declaration.substring(0, separator).trim().toLowerCase();
+      if (name != property) continue;
+      return _isReservableLength(
+        declaration.substring(separator + 1),
+        allowPercent: allowPercent,
+      );
+    }
+    return false;
+  }
+
+  /// A length is reservable when it resolves to a positive, concrete box: a
+  /// positive number with an absolute/relative unit (px, em, vh, …) or a bare
+  /// number (HTML width/height attributes are pixels). Percentages count only
+  /// where [allowPercent] is set — a percentage width tracks its container, but
+  /// a percentage height usually resolves against an auto-height parent (0).
+  bool _isReservableLength(String? raw, {required bool allowPercent}) {
+    if (raw == null) return false;
+    final value = raw.trim().toLowerCase().replaceAll('!important', '').trim();
+    if (value.isEmpty) return false;
+    final isPercent = value.endsWith('%');
+    if (isPercent && !allowPercent) return false;
+    final matched = isPercent
+        ? _reservablePercent.hasMatch(value)
+        : _reservableLength.hasMatch(value);
+    if (!matched) return false;
+    final number = double.tryParse(
+      _leadingNumber.firstMatch(value)?.group(0) ?? '',
+    );
+    return number != null && number > 0;
+  }
+
   bool _containsRemoteImageCss(String css) {
     return _cssUrl.allMatches(css).any((match) {
       final url = match.group(2);
@@ -1890,6 +2363,64 @@ class _EmailHtmlDocument {
       growable: false,
     );
     return base64Url.encode(bytes).replaceAll('=', '');
+  }
+
+  bool _isDarkColor(int value) {
+    final red = ((value >> 16) & 0xff) / 255;
+    final green = ((value >> 8) & 0xff) / 255;
+    final blue = (value & 0xff) / 255;
+
+    double linearize(double component) {
+      return component <= 0.03928
+          ? component / 12.92
+          : math.pow((component + 0.055) / 1.055, 2.4).toDouble();
+    }
+
+    final luminance =
+        0.2126 * linearize(red) +
+        0.7152 * linearize(green) +
+        0.0722 * linearize(blue);
+    return luminance < 0.5;
+  }
+
+  int _invertColorValue(int value) {
+    final alpha = value & 0xff000000;
+    final red = 0xff - ((value >> 16) & 0xff);
+    final green = 0xff - ((value >> 8) & 0xff);
+    final blue = 0xff - (value & 0xff);
+    return alpha | (red << 16) | (green << 8) | blue;
+  }
+
+  /// Pre-image of [value] under the `data-ee-invert` filter, so a color rendered
+  /// as this lands back EXACTLY on [value] after the WebView applies
+  /// `invert(1) hue-rotate(180deg)`. Both primitives are self-inverse, so the
+  /// pre-image of `hue-rotate(180) ∘ invert` is `invert ∘ hue-rotate(180)`.
+  /// Inverting alone leaves the hue-rotate uncompensated and shifts tinted
+  /// surfaces off-hue (the dark-mode card seam this corrects).
+  int _preInvertForFilter(int value) => _invertColorValue(_hueRotate180(value));
+
+  /// Applies the CSS `hue-rotate(180deg)` color matrix to an sRGB value (alpha
+  /// preserved). Coefficients are the spec luma values with a=cos180°=-1,
+  /// b=sin180°=0; rows sum to 1 so neutral grays are unchanged and only the
+  /// chroma axis flips. Self-inverse (180° twice == 360°).
+  int _hueRotate180(int value) {
+    final alpha = value & 0xff000000;
+    final red = (value >> 16) & 0xff;
+    final green = (value >> 8) & 0xff;
+    final blue = value & 0xff;
+    int channel(double v) => v.clamp(0, 255).round();
+    final r = channel(-0.574 * red + 1.430 * green + 0.144 * blue);
+    final g = channel(0.426 * red + 0.430 * green + 0.144 * blue);
+    final b = channel(0.426 * red + 1.430 * green - 0.856 * blue);
+    return alpha | (r << 16) | (g << 8) | b;
+  }
+
+  /// Whether the email ships its own dark-mode styling, in which case we honor
+  /// it (render natively dark) instead of applying the invert filter.
+  bool _declaresDarkColorScheme() {
+    return _prefersColorSchemeDark.hasMatch(rawHtml) ||
+        _colorSchemeDeclaresDark.hasMatch(rawHtml) ||
+        _metaColorSchemeDark.hasMatch(rawHtml);
   }
 
   String _cssColor(int value) {

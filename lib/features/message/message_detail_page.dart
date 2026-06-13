@@ -10,6 +10,7 @@ import '../../app/providers.dart';
 import '../../core/navigation/predictive_back_shared_element.dart';
 import '../../core/theme/mail_list_colors.dart';
 import '../../data/local/database/app_database.dart';
+import '../../data/settings/remote_image_trust.dart';
 import '../../domain/enums/message_enums.dart';
 import '../../domain/models/mail_attachment.dart';
 import '../home/widgets/gmail_mobile_message_item.dart';
@@ -94,9 +95,10 @@ class _MessageDetailPageState extends ConsumerState<MessageDetailPage> {
 
   /// 归档：移动到归档文件夹并返回列表。账户无归档文件夹时提示失败。
   Future<void> _archiveMessage() async {
-    final message = await ref.read(databaseProvider).messageDao.getMessage(
-      messageId,
-    );
+    final message = await ref
+        .read(databaseProvider)
+        .messageDao
+        .getMessage(messageId);
     if (message == null || !mounted) return;
 
     final syncService = ref.read(syncServiceProvider);
@@ -119,9 +121,10 @@ class _MessageDetailPageState extends ConsumerState<MessageDetailPage> {
 
   /// 删除：确认后删除并返回列表。
   Future<void> _deleteMessage() async {
-    final message = await ref.read(databaseProvider).messageDao.getMessage(
-      messageId,
-    );
+    final message = await ref
+        .read(databaseProvider)
+        .messageDao
+        .getMessage(messageId);
     if (message == null || !mounted) return;
 
     final confirmed = await showDialog<bool>(
@@ -171,17 +174,18 @@ class _MessageDetailPageState extends ConsumerState<MessageDetailPage> {
         value: !isRead,
       );
       // 立即推送，否则只入队、要等下一次周期同步才回推服务端。
-      final message = await ref.read(databaseProvider).messageDao.getMessage(
-        messageId,
-      );
+      final message = await ref
+          .read(databaseProvider)
+          .messageDao
+          .getMessage(messageId);
       if (message != null) {
         final account = await syncService.accountConfigFor(message.accountId);
         unawaited(syncService.flushOutbox(account));
       }
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(isRead ? '已标记为未读' : '已标记为已读')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(isRead ? '已标记为未读' : '已标记为已读')));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -192,9 +196,10 @@ class _MessageDetailPageState extends ConsumerState<MessageDetailPage> {
 
   /// 移动到文件夹（选择目标后移动，原地停留）。
   Future<void> _moveMessage() async {
-    final message = await ref.read(databaseProvider).messageDao.getMessage(
-      messageId,
-    );
+    final message = await ref
+        .read(databaseProvider)
+        .messageDao
+        .getMessage(messageId);
     if (message == null || !mounted) return;
 
     final targetFolder = await showFolderPicker(
@@ -500,100 +505,112 @@ class _ThreadContentState extends ConsumerState<_ThreadContent> {
         final account = _accountFor(accounts, representative.accountId);
 
         return RepaintBoundary(
-          child: ListView(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            children: [
-              // 账户标签：以账户颜色为底，显示账户名称，置于主题上方。
-              if (account != null)
+          // HC 模式的正文 WebView 是叠加在 Flutter 之上的原生视图,无法跟随
+          // overscroll 的 stretch 形变;关闭本页 overscroll 指示器,让所有元素一致地
+          // 不形变,消除「周围被拉伸而 WebView 纹丝不动」的割裂感(physics、滚动条
+          // 等其余 Material 行为保留)。
+          child: ScrollConfiguration(
+            behavior: ScrollConfiguration.of(
+              context,
+            ).copyWith(overscroll: false),
+            child: ListView(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              children: [
+                // 账户标签：以账户颜色为底，显示账户名称，置于主题上方。
+                if (account != null)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: _AccountBadge(account: account),
+                    ),
+                  ),
+                // 主题行：主题 + 星标按钮同行。
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: _AccountBadge(account: account),
+                  padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          representative.subject.isEmpty
+                              ? '(无主题)'
+                              : representative.subject,
+                          style: theme.textTheme.headlineSmall,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      // 星标作用于代表邮件；实时标志位驱动，Consumer 限定重建范围。
+                      Consumer(
+                        builder: (context, ref, _) {
+                          final flags =
+                              ref
+                                  .watch(
+                                    messageFlagsProvider(representative.id),
+                                  )
+                                  .value ??
+                              representative.flagsBitmask;
+                          final isFlagged =
+                              (flags & (1 << MessageFlag.flagged.index)) != 0;
+                          return IconButton(
+                            icon: Icon(
+                              isFlagged ? Icons.star : Icons.star_border,
+                            ),
+                            color: isFlagged ? const Color(0xFFE0A100) : null,
+                            tooltip: isFlagged ? '取消星标' : '星标',
+                            onPressed: () =>
+                                _toggleStar(representative, isFlagged),
+                          );
+                        },
+                      ),
+                    ],
                   ),
                 ),
-              // 主题行：主题 + 星标按钮同行。
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        representative.subject.isEmpty
-                            ? '(无主题)'
-                            : representative.subject,
-                        style: theme.textTheme.headlineSmall,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    // 星标作用于代表邮件；实时标志位驱动，Consumer 限定重建范围。
-                    Consumer(
-                      builder: (context, ref, _) {
-                        final flags =
-                            ref
-                                .watch(messageFlagsProvider(representative.id))
-                                .value ??
-                            representative.flagsBitmask;
-                        final isFlagged =
-                            (flags & (1 << MessageFlag.flagged.index)) != 0;
-                        return IconButton(
-                          icon: Icon(
-                            isFlagged ? Icons.star : Icons.star_border,
-                          ),
-                          color: isFlagged ? const Color(0xFFE0A100) : null,
-                          tooltip: isFlagged ? '取消星标' : '星标',
-                          onPressed: () => _toggleStar(representative, isFlagged),
-                        );
-                      },
-                    ),
-                  ],
-                ),
-              ),
 
-              // 每封邮件一张卡片（多封 = 会话堆叠）。
-              M3ECardList(
-                itemCount: thread.length,
-                margin: const EdgeInsets.symmetric(horizontal: 12),
-                padding: EdgeInsets.zero,
-                gap: 3,
-                outerRadius: 24,
-                innerRadius: 4,
-                color: cardColor,
-                itemBuilder: (context, index) {
-                  final message = thread[index];
-                  final expanded = _expanded.contains(message.id);
-                  // 从未展开过的折叠卡片不挂载正文，避免一次性下载整条会话的正文。
-                  final mountBody =
-                      expanded || _everExpanded.contains(message.id);
+                // 每封邮件一张卡片（多封 = 会话堆叠）。
+                M3ECardList(
+                  itemCount: thread.length,
+                  margin: const EdgeInsets.symmetric(horizontal: 12),
+                  padding: EdgeInsets.zero,
+                  gap: 3,
+                  outerRadius: 24,
+                  innerRadius: 4,
+                  color: cardColor,
+                  itemBuilder: (context, index) {
+                    final message = thread[index];
+                    final expanded = _expanded.contains(message.id);
+                    // 从未展开过的折叠卡片不挂载正文，避免一次性下载整条会话的正文。
+                    final mountBody =
+                        expanded || _everExpanded.contains(message.id);
 
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      MessageHeaderTile(
-                        message: message,
-                        selfEmails: selfEmails,
-                        displaySettings: displaySettings,
-                        collapsed: !expanded,
-                        onToggleCollapsed: () => _toggleExpanded(message.id),
-                      ),
-                      if (mountBody)
-                        Offstage(
-                          offstage: !expanded,
-                          child: Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-                            child: _MessageBody(
-                              key: ValueKey(message.id),
-                              message: message,
-                              backgroundColor: cardColor,
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        MessageHeaderTile(
+                          message: message,
+                          selfEmails: selfEmails,
+                          displaySettings: displaySettings,
+                          collapsed: !expanded,
+                          onToggleCollapsed: () => _toggleExpanded(message.id),
+                        ),
+                        if (mountBody)
+                          Offstage(
+                            offstage: !expanded,
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                              child: _MessageBody(
+                                key: ValueKey(message.id),
+                                message: message,
+                                backgroundColor: cardColor,
+                              ),
                             ),
                           ),
-                        ),
-                    ],
-                  );
-                },
-              ),
-            ],
+                      ],
+                    );
+                  },
+                ),
+              ],
+            ),
           ),
         );
       },
@@ -753,6 +770,9 @@ class _MessageBodyState extends ConsumerState<_MessageBody> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // 在 build 本体里 watch（builder 闭包中调用 ref.watch 不合法）；
+    // 信任名单变化会重建本组件，使同发件人的其余卡片也即时出图。
+    final remoteImageTrust = ref.watch(remoteImageTrustProvider);
 
     return StreamBuilder<MessageBody?>(
       stream: _bodyStream,
@@ -761,7 +781,7 @@ class _MessageBodyState extends ConsumerState<_MessageBody> {
 
         // 本地已有正文行（下载成功后才会写入）：展示正文 + 附件。
         if (body != null) {
-          return _buildContent(theme, body);
+          return _buildContent(theme, body, remoteImageTrust);
         }
 
         // Drift 的 watchSingleOrNull 首帧会先进入 waiting。此时不能判定
@@ -795,10 +815,17 @@ class _MessageBodyState extends ConsumerState<_MessageBody> {
     return body != null && body.fetchState != BodyFetchState.notDownloaded;
   }
 
-  Widget _buildContent(ThemeData theme, MessageBody body) {
+  Widget _buildContent(
+    ThemeData theme,
+    MessageBody body,
+    RemoteImageTrust remoteImageTrust,
+  ) {
     final hasHtml = body.htmlBody != null && body.htmlBody!.isNotEmpty;
     final hasPlain = body.plainText != null && body.plainText!.isNotEmpty;
     final attachments = AttachmentUtils.parseAttachments(body.attachmentsMeta);
+    // 受信发件人（手动信任过或命中预置名单）的远程图片自动加载；
+    // 其余发件人先拦截，手动加载一次后正文里会给出「信任该发件人」入口。
+    final senderEmail = widget.message.fromEmail?.trim();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -812,6 +839,13 @@ class _MessageBodyState extends ConsumerState<_MessageBody> {
             linkColor: theme.colorScheme.primary,
             borderColor: theme.colorScheme.outlineVariant,
             onOpenUrl: _openLink,
+            senderEmail: senderEmail,
+            autoLoadRemoteImages: remoteImageTrust.isTrustedSender(senderEmail),
+            onTrustSender: senderEmail == null || senderEmail.isEmpty
+                ? null
+                : () => ref
+                      .read(remoteImageTrustProvider.notifier)
+                      .trustSender(senderEmail),
           )
         else if (hasPlain)
           Container(

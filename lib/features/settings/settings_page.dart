@@ -23,6 +23,7 @@ import 'widgets/account_profile_editors.dart';
 /// 对应的设置项按钮（与邮件详情收束回列表卡片一致）。
 const String _displaySettingsReturnId = 'settings:display';
 const String _notificationSettingsReturnId = 'settings:notifications';
+const String _remoteImagesReturnId = 'settings:remote-images';
 const String _addAccountReturnId = 'settings:add-account';
 const String _aboutReturnId = 'settings:about';
 const String _aboutLicensesReturnId = 'settings:about:licenses';
@@ -129,6 +130,17 @@ class SettingsPage extends ConsumerWidget {
                         title: '通知',
                         subtitle: '系统通知设置',
                         onTap: () => context.push('/settings/notifications'),
+                      ),
+                      _navigableSettingsTile(
+                        context: context,
+                        returnId: _remoteImagesReturnId,
+                        isFirst: false,
+                        isLast: false,
+                        icon: Icons.image_outlined,
+                        iconColor: colors.primary,
+                        title: '邮件中的图片',
+                        subtitle: '远程图片自动加载与信任名单',
+                        onTap: () => context.push('/settings/remote-images'),
                       ),
                       _SettingsTile(
                         icon: Icons.cloud_sync_outlined,
@@ -748,6 +760,123 @@ class DisplaySettingsPage extends ConsumerWidget {
 
     return PredictiveBackReturnTarget(
       id: _displaySettingsReturnId,
+      child: scaffold,
+    );
+  }
+}
+
+/// 「邮件中的图片」二级页：管理远程图片自动加载的信任名单。
+///
+/// 非受信发件人的远程图片默认拦截（防跟踪像素）；这里可整体开关预置信任
+/// 名单（知名服务商官方域名），并移除曾在邮件里手动信任过的发件人。
+class RemoteImageSettingsPage extends ConsumerWidget {
+  const RemoteImageSettingsPage({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final trust = ref.watch(remoteImageTrustProvider);
+    final bottomPadding = MediaQuery.paddingOf(context).bottom;
+    final trustedSenders = trust.trustedSenders.toList()..sort();
+
+    final scaffold = Scaffold(
+      backgroundColor: colors.surface,
+      body: CustomScrollView(
+        slivers: [
+          const SliverAppBar.large(title: Text('邮件中的图片')),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(16, 4, 16, bottomPadding + 24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(8, 0, 8, 16),
+                    child: Text(
+                      '邮件里的远程图片可能被用来跟踪阅读行为，默认拦截。'
+                      '受信发件人的图片会自动显示；其他邮件点「加载图片」后可选择信任该发件人。',
+                      style: context.texts.bodyMedium?.copyWith(
+                        color: colors.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                  _SettingsSection(
+                    title: '自动加载',
+                    children: [
+                      _SettingsTile(
+                        icon: Icons.verified_outlined,
+                        iconColor: colors.primary,
+                        title: '预置信任名单',
+                        subtitle: '知名服务商官方域名的通知邮件自动显示图片',
+                        trailing: Switch(
+                          value: trust.presetEnabled,
+                          onChanged: (enabled) {
+                            unawaited(
+                              ref
+                                  .read(remoteImageTrustProvider.notifier)
+                                  .setPresetEnabled(enabled),
+                            );
+                          },
+                        ),
+                        onTap: () {
+                          unawaited(
+                            ref
+                                .read(remoteImageTrustProvider.notifier)
+                                .setPresetEnabled(!trust.presetEnabled),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  _SettingsSection.custom(
+                    title: '我信任的发件人',
+                    child: trustedSenders.isEmpty
+                        ? Padding(
+                            padding: const EdgeInsets.all(20),
+                            child: Text(
+                              '还没有手动信任的发件人。在邮件里点「加载图片」后，可选择信任该发件人。',
+                              style: context.texts.bodyMedium?.copyWith(
+                                color: colors.onSurfaceVariant,
+                              ),
+                            ),
+                          )
+                        : Column(
+                            children: [
+                              for (var i = 0; i < trustedSenders.length; i++) ...[
+                                if (i > 0) const _SectionDivider(),
+                                _SettingsTile(
+                                  icon: Icons.person_outline,
+                                  iconColor: colors.tertiary,
+                                  title: trustedSenders[i],
+                                  trailing: IconButton(
+                                    icon: const Icon(Icons.delete_outline),
+                                    tooltip: '移除',
+                                    onPressed: () {
+                                      unawaited(
+                                        ref
+                                            .read(
+                                              remoteImageTrustProvider.notifier,
+                                            )
+                                            .revokeSender(trustedSenders[i]),
+                                      );
+                                    },
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    return PredictiveBackReturnTarget(
+      id: _remoteImagesReturnId,
       child: scaffold,
     );
   }

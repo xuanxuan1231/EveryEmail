@@ -13,6 +13,7 @@ import '../data/secure/token_store.dart';
 import '../data/settings/app_font_settings.dart';
 import '../data/settings/account_settings.dart';
 import '../data/settings/display_settings.dart';
+import '../data/settings/remote_image_trust.dart';
 import '../data/sync/body_prefetch_service.dart';
 import '../data/sync/realtime_sync_service.dart';
 import '../data/sync/sync_service.dart';
@@ -118,6 +119,48 @@ class DisplaySettingsController extends StateNotifier<DisplaySettings> {
     if (settings == state) return;
     state = settings;
     await DisplaySettingsStore.write(settings);
+  }
+}
+
+/// 远程图片信任设置。在 [bootstrap] 中读取持久化值后注入，打开邮件时即可
+/// 同步判定发件人是否受信，避免首帧闪过「远程图片已阻止」横条。
+final remoteImageTrustProvider =
+    StateNotifierProvider<RemoteImageTrustController, RemoteImageTrust>((ref) {
+      throw UnimplementedError(
+        'remoteImageTrustProvider 必须在 ProviderScope overrides 中注入初始设置',
+      );
+    });
+
+/// 远程图片信任控制器：信任/移除发件人、开关预置名单，即时生效并持久化。
+class RemoteImageTrustController extends StateNotifier<RemoteImageTrust> {
+  RemoteImageTrustController(super.initial);
+
+  Future<void> trustSender(String email) async {
+    final normalized = RemoteImageTrust.normalizeSenderEmail(email);
+    if (normalized == null) return;
+    await _set(
+      state.copyWith(trustedSenders: {...state.trustedSenders, normalized}),
+    );
+  }
+
+  Future<void> revokeSender(String email) async {
+    final normalized = RemoteImageTrust.normalizeSenderEmail(email);
+    if (normalized == null) return;
+    await _set(
+      state.copyWith(
+        trustedSenders: {...state.trustedSenders}..remove(normalized),
+      ),
+    );
+  }
+
+  Future<void> setPresetEnabled(bool enabled) {
+    return _set(state.copyWith(presetEnabled: enabled));
+  }
+
+  Future<void> _set(RemoteImageTrust trust) async {
+    if (trust == state) return;
+    state = trust;
+    await RemoteImageTrustStore.write(trust);
   }
 }
 

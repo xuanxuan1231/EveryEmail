@@ -25,6 +25,9 @@ Future<void> main() async {
         displaySettingsProvider.overrideWith(
           (ref) => DisplaySettingsController(result.displaySettings),
         ),
+        remoteImageTrustProvider.overrideWith(
+          (ref) => RemoteImageTrustController(result.remoteImageTrust),
+        ),
       ],
       child: const FcmBootstrap(
         child: RealtimeSyncCoordinator(

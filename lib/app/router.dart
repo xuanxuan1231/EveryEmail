@@ -53,6 +53,10 @@ final GoRouter appRouter = GoRouter(
       builder: (context, state) => const NotificationSettingsPage(),
     ),
     GoRoute(
+      path: '/settings/remote-images',
+      builder: (context, state) => const RemoteImageSettingsPage(),
+    ),
+    GoRoute(
       path: '/settings/about',
       builder: (context, state) => const AboutPage(),
     ),
