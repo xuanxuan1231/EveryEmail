@@ -1036,7 +1036,9 @@ async function sendFCMMessage(token, data, env) {
       body: data.body || '您有新邮件',
     };
     message.android.notification = {
-      channel_id: 'everyemail_default',
+      // 按账户投递到对应「邮件」渠道，使系统通知设置里的逐账户开关生效；缺账户信息时
+      // 回退到兜底渠道（App 已创建，避免落到 FCM 自动建的 "Misc"）。
+      channel_id: data.accountId ? `mail_${data.accountId}` : 'everyemail_default',
       sound: 'default',
     };
   }

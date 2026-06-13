@@ -5,6 +5,8 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/platform/notification_channels.dart';
+import '../data/local/database/app_database.dart';
 import 'providers.dart';
 
 /// FCM 后台消息处理器。
@@ -124,5 +126,26 @@ class _FcmBootstrapState extends ConsumerState<FcmBootstrap> {
   }
 
   @override
-  Widget build(BuildContext context) => widget.child;
+  Widget build(BuildContext context) {
+    // 账户列表变化（增、删、改名）时重新同步通知渠道。渠道不依赖 Firebase，独立于上面的
+    // FCM 流程；放在这里只为复用 FcmBootstrap 的生命周期位置。首次数据到达也会触发一次。
+    ref.listen<AsyncValue<List<Account>>>(accountsProvider, (_, next) {
+      next.whenData(_syncNotificationChannels);
+    });
+    return widget.child;
+  }
+
+  void _syncNotificationChannels(List<Account> accounts) {
+    unawaited(
+      NotificationChannels.sync([
+        for (final account in accounts)
+          (
+            id: account.id,
+            name: account.displayName.trim().isNotEmpty
+                ? account.displayName
+                : account.email,
+          ),
+      ]),
+    );
+  }
 }

@@ -963,7 +963,7 @@ class NotificationSettingsPage extends ConsumerWidget {
                         icon: Icons.open_in_new_rounded,
                         iconColor: colors.tertiary,
                         title: '系统通知设置',
-                        subtitle: '声音、震动、提醒方式由系统管理',
+                        subtitle: '按账户开关、提示音与震动由系统管理',
                         onTap: () {
                           unawaited(SystemSettings.openNotificationSettings());
                         },
@@ -974,7 +974,7 @@ class NotificationSettingsPage extends ConsumerWidget {
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 4),
                     child: Text(
-                      '新邮件通知由系统直接推送。如需调整提示音、震动或关闭通知，请前往系统通知设置。',
+                      '新邮件通知由系统直接推送，并按账户分类。如需逐个账户开关通知，或调整提示音、震动，请前往系统通知设置。',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: colors.onSurfaceVariant,
                       ),
