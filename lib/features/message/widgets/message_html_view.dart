@@ -1059,30 +1059,35 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
 
   Widget _buildRemoteImagePrompt() {
     final theme = Theme.of(context);
-    return Material(
-      color: theme.colorScheme.surfaceContainerHighest,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        child: Row(
-          children: [
-            Icon(
-              Icons.image_not_supported_outlined,
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                '远程图片已阻止',
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+      child: Material(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+        clipBehavior: Clip.antiAlias,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: Row(
+            children: [
+              Icon(
+                Icons.image_not_supported_outlined,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  '远程图片已阻止',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
                 ),
               ),
-            ),
-            TextButton(
-              onPressed: () => unawaited(_enableRemoteImages()),
-              child: const Text('加载图片'),
-            ),
-          ],
+              TextButton(
+                onPressed: () => unawaited(_enableRemoteImages()),
+                child: const Text('加载图片'),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1091,38 +1096,43 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
   /// 手动加载图片后的跟进提示：可一键信任该发件人，以后自动加载。
   Widget _buildTrustSenderOffer() {
     final theme = Theme.of(context);
-    return Material(
-      color: theme.colorScheme.surfaceContainerHighest,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 10, 4, 10),
-        child: Row(
-          children: [
-            Icon(
-              Icons.verified_user_outlined,
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                '信任 ${widget.senderEmail?.trim()}？其邮件中的图片将自动加载',
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+      child: Material(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+        clipBehavior: Clip.antiAlias,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 4, 10),
+          child: Row(
+            children: [
+              Icon(
+                Icons.verified_user_outlined,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  '信任 ${widget.senderEmail?.trim()}？其邮件中的图片将自动加载',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
                 ),
               ),
-            ),
-            TextButton(
-              onPressed: () => unawaited(_trustSender()),
-              child: const Text('信任'),
-            ),
-            IconButton(
-              icon: const Icon(Icons.close),
-              iconSize: 18,
-              tooltip: '关闭',
-              onPressed: () => setState(() => _trustOfferVisible = false),
-            ),
-          ],
+              TextButton(
+                onPressed: () => unawaited(_trustSender()),
+                child: const Text('信任'),
+              ),
+              IconButton(
+                icon: const Icon(Icons.close),
+                iconSize: 18,
+                tooltip: '关闭',
+                onPressed: () => setState(() => _trustOfferVisible = false),
+              ),
+            ],
+          ),
         ),
       ),
     );

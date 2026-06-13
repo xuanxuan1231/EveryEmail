@@ -24,6 +24,7 @@ import 'widgets/account_profile_editors.dart';
 const String _displaySettingsReturnId = 'settings:display';
 const String _notificationSettingsReturnId = 'settings:notifications';
 const String _remoteImagesReturnId = 'settings:remote-images';
+const String _securitySettingsReturnId = 'settings:security';
 const String _addAccountReturnId = 'settings:add-account';
 const String _aboutReturnId = 'settings:about';
 const String _aboutLicensesReturnId = 'settings:about:licenses';
@@ -133,14 +134,14 @@ class SettingsPage extends ConsumerWidget {
                       ),
                       _navigableSettingsTile(
                         context: context,
-                        returnId: _remoteImagesReturnId,
+                        returnId: _securitySettingsReturnId,
                         isFirst: false,
                         isLast: false,
-                        icon: Icons.image_outlined,
+                        icon: Icons.shield_outlined,
                         iconColor: colors.primary,
-                        title: '邮件中的图片',
-                        subtitle: '远程图片自动加载与信任名单',
-                        onTap: () => context.push('/settings/remote-images'),
+                        title: '安全',
+                        subtitle: '远程图片加载与信任名单',
+                        onTap: () => context.push('/settings/security'),
                       ),
                       _SettingsTile(
                         icon: Icons.cloud_sync_outlined,
@@ -760,6 +761,58 @@ class DisplaySettingsPage extends ConsumerWidget {
 
     return PredictiveBackReturnTarget(
       id: _displaySettingsReturnId,
+      child: scaffold,
+    );
+  }
+}
+
+/// 「安全」二级页：邮件安全与隐私相关设置的归集入口。目前提供「邮件中的
+/// 图片」（远程图片拦截与信任名单）；后续安全类设置可继续归入此页。
+class SecuritySettingsPage extends ConsumerWidget {
+  const SecuritySettingsPage({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final bottomPadding = MediaQuery.paddingOf(context).bottom;
+
+    final scaffold = Scaffold(
+      backgroundColor: colors.surface,
+      body: CustomScrollView(
+        slivers: [
+          const SliverAppBar.large(title: Text('安全')),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(16, 4, 16, bottomPadding + 24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _SettingsSection(
+                    title: '隐私',
+                    children: [
+                      _navigableSettingsTile(
+                        context: context,
+                        returnId: _remoteImagesReturnId,
+                        isFirst: true,
+                        isLast: true,
+                        icon: Icons.image_outlined,
+                        iconColor: colors.primary,
+                        title: '邮件中的图片',
+                        subtitle: '远程图片自动加载与信任名单',
+                        onTap: () => context.push('/settings/remote-images'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    return PredictiveBackReturnTarget(
+      id: _securitySettingsReturnId,
       child: scaffold,
     );
   }
