@@ -12,6 +12,7 @@ import '../../data/auth/oauth_identity.dart';
 import '../../data/autoconfig/discovery_service.dart';
 import '../../data/local/database/app_database.dart';
 import '../../domain/enums/account_enums.dart';
+import 'account_overwrite_guard.dart';
 
 /// OAuth 认证页面（Gmail / Microsoft）。
 ///
@@ -96,22 +97,44 @@ class _OAuthPageState extends ConsumerState<OAuthPage> {
         throw Exception('未能从账户中获取邮箱地址，请重试');
       }
 
+      if (!mounted) return;
+      final overwriteDecision = await confirmAccountOverwrite(
+        context: context,
+        db: db,
+        email: resolvedEmail,
+      );
+      if (!mounted) return;
+      if (!overwriteDecision.shouldContinue) {
+        setState(() {
+          _isAuthenticating = false;
+        });
+        if (context.canPop()) {
+          context.pop();
+        } else {
+          context.go('/');
+        }
+        return;
+      }
+
       // 2. 生成账户 ID 和密钥引用
-      final accountId = generateId();
-      final secretRef = 'account_$accountId';
+      final existingAccount = overwriteDecision.existingAccount;
+      final accountId = existingAccount?.id ?? generateId();
+      final secretRef = existingAccount?.secretRef ?? 'account_$accountId';
 
       // 3. 保存 refresh token 到安全存储
       await tokenStore.writeRefreshToken(secretRef, tokens.refreshToken!);
+      await tokenStore.deletePassword(secretRef);
 
       // 4. 保存账户配置到数据库
       final isGmail = widget.accountType == AccountType.gmailOAuth;
-      final displayName = isGmail ? 'Gmail' : 'Microsoft';
+      final displayName =
+          existingAccount?.displayName ?? (isGmail ? 'Gmail' : 'Microsoft');
       // Gmail 走 IMAP/SMTP XOAUTH2，必须写入服务器配置，否则首次同步报「IMAP 配置缺失」。
       // Microsoft 走 Graph，无需 IMAP/SMTP。
       final imapConfig = isGmail ? DiscoveryService.gmailImap : null;
       final smtpConfig = isGmail ? DiscoveryService.gmailSmtp : null;
 
-      await db.accountDao.insertAccount(
+      await db.accountDao.upsertAccount(
         AccountsCompanion.insert(
           id: accountId,
           email: resolvedEmail,
@@ -119,7 +142,6 @@ class _OAuthPageState extends ConsumerState<OAuthPage> {
           accountType: widget.accountType,
           authType: AuthType.oauth,
           secretRef: Value(secretRef),
-          colorValue: Value(_generateAccountColor()),
           imapHost: Value(imapConfig?.host),
           imapPort: Value(imapConfig?.port),
           imapSocketType: Value(imapConfig?.socketType),
@@ -127,6 +149,11 @@ class _OAuthPageState extends ConsumerState<OAuthPage> {
           smtpPort: Value(smtpConfig?.port),
           smtpSocketType: Value(smtpConfig?.socketType),
           loginName: Value(isGmail ? resolvedEmail : null),
+          colorValue: Value(
+            existingAccount == null
+                ? _generateAccountColor()
+                : existingAccount.colorValue,
+          ),
         ),
       );
 
@@ -144,6 +171,7 @@ class _OAuthPageState extends ConsumerState<OAuthPage> {
       debugPrint('错误消息: $e');
       debugPrint('堆栈跟踪:\n$stackTrace');
 
+      if (!mounted) return;
       setState(() {
         _isAuthenticating = false;
         _errorMessage = _formatErrorMessage(e);

@@ -34,6 +34,21 @@ class AccountDao extends DatabaseAccessor<AppDatabase> with _$AccountDaoMixin {
     return (select(accounts)..where((t) => t.id.equals(id))).getSingleOrNull();
   }
 
+  Future<Account?> getAccountByEmail(String email) {
+    final normalized = email.trim().toLowerCase();
+    if (normalized.isEmpty) return Future.value(null);
+
+    return (select(accounts)
+          ..where((t) => t.email.lower().equals(normalized))
+          ..orderBy([
+            (t) => OrderingTerm.asc(t.sortIndex),
+            (t) => OrderingTerm.asc(t.createdAt),
+            (t) => OrderingTerm.asc(t.email),
+          ])
+          ..limit(1))
+        .getSingleOrNull();
+  }
+
   Future<void> insertAccount(AccountsCompanion account) {
     return into(accounts).insert(account);
   }

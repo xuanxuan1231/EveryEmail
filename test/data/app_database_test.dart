@@ -49,6 +49,34 @@ void main() {
     await sub.cancel();
   });
 
+  test('可按邮箱大小写不敏感查找已有账户', () async {
+    await db.accountDao.upsertAccount(
+      AccountsCompanion.insert(
+        id: 'acc-later',
+        email: 'ME@example.com',
+        displayName: '后添加',
+        accountType: AccountType.genericImap,
+        authType: AuthType.password,
+        sortIndex: const Value(1),
+      ),
+    );
+    await db.accountDao.upsertAccount(
+      AccountsCompanion.insert(
+        id: 'acc-first',
+        email: 'me@example.com',
+        displayName: '先显示',
+        accountType: AccountType.genericImap,
+        authType: AuthType.password,
+        sortIndex: const Value(0),
+      ),
+    );
+
+    final account = await db.accountDao.getAccountByEmail('  Me@Example.COM ');
+
+    expect(account?.id, 'acc-first');
+    expect(await db.accountDao.getAccountByEmail('   '), isNull);
+  });
+
   test('账户排序写入后按 sortIndex 输出', () async {
     await db.accountDao.upsertAccount(
       AccountsCompanion.insert(

@@ -6,12 +6,13 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 /// 账户元数据存 Drift，通过 `secretRef`（= 这里的 key）间接引用。
 class TokenStore {
   TokenStore([FlutterSecureStorage? storage])
-      : _storage = storage ??
-            const FlutterSecureStorage(
-              // v10+ 默认使用自定义密码（基于 Android Keystore），
-              // 旧的 EncryptedSharedPreferences 已弃用，无需再配置。
-              aOptions: AndroidOptions(),
-            );
+    : _storage =
+          storage ??
+          const FlutterSecureStorage(
+            // v10+ 默认使用自定义密码（基于 Android Keystore），
+            // 旧的 EncryptedSharedPreferences 已弃用，无需再配置。
+            aOptions: AndroidOptions(),
+          );
 
   final FlutterSecureStorage _storage;
 
@@ -34,9 +35,17 @@ class TokenStore {
     return _storage.read(key: _passwordKey(secretRef));
   }
 
+  Future<void> deleteRefreshToken(String secretRef) {
+    return _storage.delete(key: _refreshKey(secretRef));
+  }
+
+  Future<void> deletePassword(String secretRef) {
+    return _storage.delete(key: _passwordKey(secretRef));
+  }
+
   /// 移除账户时清除其全部密钥。
   Future<void> deleteSecrets(String secretRef) async {
-    await _storage.delete(key: _refreshKey(secretRef));
-    await _storage.delete(key: _passwordKey(secretRef));
+    await deleteRefreshToken(secretRef);
+    await deletePassword(secretRef);
   }
 }

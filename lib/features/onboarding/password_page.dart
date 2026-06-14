@@ -11,6 +11,7 @@ import '../../data/backends/imap/imap_mail_backend.dart';
 import '../../data/local/database/app_database.dart';
 import '../../domain/enums/account_enums.dart';
 import '../../domain/models/account_config.dart';
+import 'account_overwrite_guard.dart';
 
 /// 密码输入页面（IMAP 账户）。
 ///
@@ -82,6 +83,14 @@ class _PasswordPageState extends ConsumerState<PasswordPage> {
   Future<void> _testAndSave() async {
     if (!_formKey.currentState!.validate()) return;
 
+    final db = ref.read(databaseProvider);
+    final overwriteDecision = await confirmAccountOverwrite(
+      context: context,
+      db: db,
+      email: widget.email,
+    );
+    if (!mounted || !overwriteDecision.shouldContinue) return;
+
     setState(() {
       _isTesting = true;
       _errorMessage = null;
@@ -90,13 +99,14 @@ class _PasswordPageState extends ConsumerState<PasswordPage> {
     try {
       final password = _passwordController.text;
       final tokenStore = ref.read(tokenStoreProvider);
-      final db = ref.read(databaseProvider);
+      final email = widget.email.trim();
+      final existingAccount = overwriteDecision.existingAccount;
 
       // 1. 生成临时账户配置用于测试连接
       final testAccount = AccountConfig(
         id: 'test',
-        email: widget.email,
-        displayName: widget.email,
+        email: email,
+        displayName: email,
         type: AccountType.genericImap,
         authType: AuthType.password,
         imap: widget.imap,
@@ -112,18 +122,19 @@ class _PasswordPageState extends ConsumerState<PasswordPage> {
       await backend.disconnect();
 
       // 3. 生成账户 ID 和密钥引用
-      final accountId = generateId();
-      final secretRef = 'account_$accountId';
+      final accountId = existingAccount?.id ?? generateId();
+      final secretRef = existingAccount?.secretRef ?? 'account_$accountId';
 
       // 4. 保存密码到安全存储
       await tokenStore.writePassword(secretRef, password);
+      await tokenStore.deleteRefreshToken(secretRef);
 
       // 5. 保存账户配置到数据库
-      await db.accountDao.insertAccount(
+      await db.accountDao.upsertAccount(
         AccountsCompanion.insert(
           id: accountId,
-          email: widget.email,
-          displayName: widget.email.split('@').first,
+          email: email,
+          displayName: existingAccount?.displayName ?? email.split('@').first,
           accountType: AccountType.genericImap,
           authType: AuthType.password,
           secretRef: Value(secretRef),
@@ -134,17 +145,22 @@ class _PasswordPageState extends ConsumerState<PasswordPage> {
           smtpPort: Value(widget.smtp?.port),
           smtpSocketType: Value(widget.smtp?.socketType),
           loginName: Value(_loginNameController.text.trim()),
-          colorValue: Value(_generateAccountColor()),
+          colorValue: Value(
+            existingAccount == null
+                ? _generateAccountColor()
+                : existingAccount.colorValue,
+          ),
         ),
       );
 
       // 6. 导航到完善账户信息页面（首次同步前可改名称/颜色/头像）
       if (mounted) {
         context.push(
-          '/onboarding/profile?email=${Uri.encodeComponent(widget.email)}&accountId=${Uri.encodeComponent(accountId)}',
+          '/onboarding/profile?email=${Uri.encodeComponent(email)}&accountId=${Uri.encodeComponent(accountId)}',
         );
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _isTesting = false;
         _errorMessage = '连接失败: ${e.toString()}';
@@ -154,14 +170,14 @@ class _PasswordPageState extends ConsumerState<PasswordPage> {
 
   int _generateAccountColor() {
     final colors = [
-      Colors.blue.value,
-      Colors.green.value,
-      Colors.orange.value,
-      Colors.purple.value,
-      Colors.teal.value,
-      Colors.pink.value,
-      Colors.indigo.value,
-      Colors.amber.value,
+      Colors.blue.toARGB32(),
+      Colors.green.toARGB32(),
+      Colors.orange.toARGB32(),
+      Colors.purple.toARGB32(),
+      Colors.teal.toARGB32(),
+      Colors.pink.toARGB32(),
+      Colors.indigo.toARGB32(),
+      Colors.amber.toARGB32(),
     ];
     return colors[DateTime.now().millisecondsSinceEpoch % colors.length];
   }

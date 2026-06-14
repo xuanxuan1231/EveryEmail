@@ -26,6 +26,7 @@ import '../backends/sync_types.dart';
 import '../local/database/app_database.dart';
 import '../secure/token_store.dart';
 import '../settings/account_settings.dart';
+import 'initial_sync_progress.dart';
 
 /// 邮件同步服务：编排后端同步与数据库持久化。
 ///
@@ -604,11 +605,12 @@ class SyncService {
   /// 后端（尤其 IMAP CONDSTORE 增量）在 [SyncResult.updated] 里返回的信封
   /// 通常只含 `ref` + `flags`（FLAGS-only fetch），不能走全列 upsert，否则会把
   /// subject/from/date 等覆盖成空值。这里按后端引用定位本地行后仅写标志位。
-  Future<void> _applyFlagUpdates(
+  Future<int> _applyFlagUpdates(
     List<MessageEnvelope> updated,
     Folder folder,
     AccountConfig account,
   ) async {
+    var updatedCount = 0;
     for (final env in updated) {
       final ref = env.ref;
       Message? local;
@@ -621,8 +623,10 @@ class SyncService {
       }
       if (local != null) {
         await _db.messageDao.updateFlags(local.id, _flagsToBitmask(env.flags));
+        updatedCount++;
       }
     }
+    return updatedCount;
   }
 
   /// 监听账户收件箱的实时事件（IMAP IDLE）。
@@ -1294,18 +1298,46 @@ class SyncService {
     AccountConfig account,
     int messageLimit, {
     void Function(double progress)? onProgress,
+    InitialSyncProgressCallback? onDetailedProgress,
   }) async {
+    void emitDetailed(InitialSyncProgress progress) {
+      onDetailedProgress?.call(progress);
+    }
+
     try {
       onProgress?.call(0.1);
+      emitDetailed(
+        InitialSyncProgress(
+          stage: InitialSyncStage.connecting,
+          progress: 0.1,
+          statusMessage: '正在连接 ${account.email}',
+        ),
+      );
       final backend = await _getBackend(account);
 
       onProgress?.call(0.2);
+      emitDetailed(
+        const InitialSyncProgress(
+          stage: InitialSyncStage.listingFolders,
+          progress: 0.2,
+          statusMessage: '正在读取文件夹列表',
+        ),
+      );
       // 1. 拉取文件夹列表
       final folders = await backend.listFolders();
 
       onProgress?.call(0.3);
+      emitDetailed(
+        InitialSyncProgress(
+          stage: InitialSyncStage.savingFolders,
+          progress: 0.3,
+          folderCount: folders.length,
+          statusMessage: '发现 ${folders.length} 个文件夹',
+        ),
+      );
       // 2. 持久化文件夹
-      for (final folder in folders) {
+      for (var i = 0; i < folders.length; i++) {
+        final folder = folders[i];
         var existing = await _db.folderDao.getByRemoteId(
           account.id,
           folder.remoteId,
@@ -1327,6 +1359,17 @@ class SyncService {
           );
           existing = await _db.folderDao.getFolder(folderId);
         }
+
+        emitDetailed(
+          InitialSyncProgress(
+            stage: InitialSyncStage.savingFolders,
+            progress: 0.3 + ((i + 1) / folders.length) * 0.1,
+            currentFolderName: folder.displayName,
+            folderIndex: i + 1,
+            folderCount: folders.length,
+            statusMessage: '正在保存文件夹',
+          ),
+        );
       }
 
       onProgress?.call(0.4);
@@ -1334,6 +1377,15 @@ class SyncService {
       final inboxFolder = folders
           .where((f) => f.type == FolderType.inbox)
           .firstOrNull;
+      emitDetailed(
+        InitialSyncProgress(
+          stage: InitialSyncStage.syncingInbox,
+          progress: 0.4,
+          currentFolderName: inboxFolder?.displayName,
+          folderCount: folders.length,
+          statusMessage: inboxFolder == null ? '没有找到收件箱' : '准备同步收件箱',
+        ),
+      );
       if (inboxFolder != null) {
         final dbFolder = await _db.folderDao.getByRemoteId(
           account.id,
@@ -1345,10 +1397,18 @@ class SyncService {
             dbFolder,
             messageLimit,
             onProgress,
+            onDetailedProgress,
           );
         }
       } else {
         onProgress?.call(1.0);
+        emitDetailed(
+          const InitialSyncProgress(
+            stage: InitialSyncStage.complete,
+            progress: 1.0,
+            statusMessage: '同步完成',
+          ),
+        );
       }
     } catch (e) {
       debugPrint('同步账户失败: $e');
@@ -1362,10 +1422,23 @@ class SyncService {
     Folder folder,
     int messageLimit,
     void Function(double progress)? onProgress,
+    InitialSyncProgressCallback? onDetailedProgress,
   ) async {
+    void emitDetailed(InitialSyncProgress progress) {
+      onDetailedProgress?.call(progress);
+    }
+
     final backend = await _getBackend(account);
 
     onProgress?.call(0.5);
+    emitDetailed(
+      InitialSyncProgress(
+        stage: InitialSyncStage.syncingInbox,
+        progress: 0.5,
+        currentFolderName: folder.displayName,
+        statusMessage: '正在读取同步游标',
+      ),
+    );
 
     // 获取同步状态
     final syncState = await _db.messageDao.getSyncState(folder.id);
@@ -1377,8 +1450,20 @@ class SyncService {
     final result = await backend.syncDelta(folder.toMailboxFolder(), token);
 
     onProgress?.call(0.7);
+    emitDetailed(
+      InitialSyncProgress(
+        stage: InitialSyncStage.savingMessages,
+        progress: 0.7,
+        currentFolderName: folder.displayName,
+        fetchedMessages: result.added.length,
+        updatedMessages: result.updated.length,
+        removedMessages: result.removedRefs.length,
+        statusMessage: '正在处理收件箱变更',
+      ),
+    );
 
     // 处理删除
+    var removedCount = 0;
     if (result.removedRefs.isNotEmpty) {
       final removedIds = <String>[];
       for (final ref in result.removedRefs) {
@@ -1401,19 +1486,47 @@ class SyncService {
       }
       if (removedIds.isNotEmpty) {
         await _db.messageDao.deleteMessages(removedIds);
+        removedCount = removedIds.length;
       }
     }
 
     onProgress?.call(0.8);
+    emitDetailed(
+      InitialSyncProgress(
+        stage: InitialSyncStage.savingMessages,
+        progress: 0.8,
+        currentFolderName: folder.displayName,
+        fetchedMessages: result.added.length,
+        updatedMessages: result.updated.length,
+        removedMessages: removedCount,
+        statusMessage: '正在保存邮件',
+      ),
+    );
 
     // 处理新增/更新（限制数量）
     final messagesToSync = result.added.take(messageLimit).toList();
     await _persistMessages(messagesToSync, folder);
 
     // 应用入站标志变更（仅 flags，不覆盖其它列）。
-    await _applyFlagUpdates(result.updated, folder, account);
+    final updatedCount = await _applyFlagUpdates(
+      result.updated,
+      folder,
+      account,
+    );
 
     onProgress?.call(0.9);
+    emitDetailed(
+      InitialSyncProgress(
+        stage: InitialSyncStage.updatingCursor,
+        progress: 0.9,
+        currentFolderName: folder.displayName,
+        fetchedMessages: result.added.length,
+        savedMessages: messagesToSync.length,
+        updatedMessages: updatedCount,
+        removedMessages: removedCount,
+        statusMessage: '正在更新同步游标',
+      ),
+    );
 
     // 更新同步状态
     if (result.newToken != null) {
@@ -1427,6 +1540,18 @@ class SyncService {
     }
 
     onProgress?.call(1.0);
+    emitDetailed(
+      InitialSyncProgress(
+        stage: InitialSyncStage.complete,
+        progress: 1.0,
+        currentFolderName: folder.displayName,
+        fetchedMessages: result.added.length,
+        savedMessages: messagesToSync.length,
+        updatedMessages: updatedCount,
+        removedMessages: removedCount,
+        statusMessage: '同步完成',
+      ),
+    );
   }
 }
 
