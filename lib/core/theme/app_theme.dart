@@ -33,6 +33,7 @@ class AppTheme {
     final ThemeData base = ThemeData(colorScheme: scheme, useMaterial3: true);
     return base.copyWith(
       scaffoldBackgroundColor: scheme.surface,
+      iconTheme: base.iconTheme.copyWith(grade: 60, opticalSize: 24),
       // 页面转场：Android 启用预见式返回（Predictive Back）。
       //
       // 默认的 [ZoomPageTransitionsBuilder] 不参与系统预见式返回手势的连续驱动，
