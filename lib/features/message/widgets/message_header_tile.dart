@@ -8,6 +8,9 @@ import '../../../data/settings/display_settings.dart';
 import '../../../domain/enums/message_enums.dart';
 import '../../../domain/models/mail_recipient.dart';
 
+const double _messageHeaderAvatarSize = 40;
+const double _messageHeaderAvatarTextSize = 18;
+
 /// 单封邮件的头部列表行（Gmail 会话式阅读页的一行）。
 ///
 /// 结构（为后续「一封会话里多封邮件」铺垫，目前一封邮件 = 一行）：
@@ -465,15 +468,15 @@ class _MessageHeaderTileState extends ConsumerState<MessageHeaderTile> {
         : Colors.black;
 
     return Container(
-      width: 48,
-      height: 48,
+      width: _messageHeaderAvatarSize,
+      height: _messageHeaderAvatarSize,
       decoration: BoxDecoration(color: color, shape: BoxShape.circle),
       child: Center(
         child: Text(
           initial,
           style: TextStyle(
             color: onColor,
-            fontSize: 20,
+            fontSize: _messageHeaderAvatarTextSize,
             fontWeight: FontWeight.w500,
           ),
         ),
