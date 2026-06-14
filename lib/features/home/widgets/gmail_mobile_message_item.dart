@@ -6,6 +6,9 @@ import '../../../data/local/database/app_database.dart';
 import '../../../data/settings/display_settings.dart';
 import '../../../domain/enums/message_enums.dart';
 
+const double _senderAvatarSize = 40;
+const double _senderAvatarTextSize = 18;
+
 bool gmailMobileMessageIsRead(Message message) {
   return (message.flagsBitmask & (1 << MessageFlag.seen.index)) != 0;
 }
@@ -76,7 +79,7 @@ class GmailMobileMessageItem extends StatelessWidget {
 /// Gmail 风格邮件内容，适合作为 `M3ECardList` / `M3ECard` 的 child。
 ///
 /// 特点（基于 Android/iOS Gmail App）：
-/// - 发件人头像（48x48px）
+/// - 发件人头像（40x40px）
 /// - 发件人与时间同行
 /// - 主题与预览独立成行
 /// - 未读邮件左侧有强调色竖条
@@ -186,8 +189,8 @@ class GmailMobileMessageCardContent extends StatelessWidget {
                               style: TextStyle(
                                 fontSize: 15,
                                 fontWeight: isRead
-                                    ? FontWeight.w500
-                                    : FontWeight.w700,
+                                    ? FontWeight.normal
+                                    : FontWeight.w500,
                                 color: primaryText,
                                 height: 1.25,
                               ),
@@ -362,13 +365,13 @@ class GmailMobileMessageCardContent extends StatelessWidget {
 
   Widget _buildSelectedAvatar(ThemeData theme) {
     return Container(
-      width: 48,
-      height: 48,
+      width: _senderAvatarSize,
+      height: _senderAvatarSize,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         color: theme.colorScheme.primary,
       ),
-      child: Icon(Symbols.check, color: theme.colorScheme.onPrimary, size: 24),
+      child: Icon(Symbols.check, color: theme.colorScheme.onPrimary, size: 22),
     );
   }
 
@@ -384,15 +387,15 @@ class GmailMobileMessageCardContent extends StatelessWidget {
         : Colors.black;
 
     return Container(
-      width: 48,
-      height: 48,
+      width: _senderAvatarSize,
+      height: _senderAvatarSize,
       decoration: BoxDecoration(color: color, shape: BoxShape.circle),
       child: Center(
         child: Text(
           initial,
           style: TextStyle(
             color: onColor,
-            fontSize: 20,
+            fontSize: _senderAvatarTextSize,
             fontWeight: FontWeight.w500,
           ),
         ),
