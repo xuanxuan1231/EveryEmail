@@ -2,6 +2,7 @@ import 'package:drift/drift.dart' hide Column;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:material_symbols_icons/symbols.dart';
 
 import '../../app/providers.dart';
 import '../../core/config/app_config.dart';
@@ -225,7 +226,7 @@ class _OAuthPageState extends ConsumerState<OAuthPage> {
                 ),
               ] else if (_errorMessage != null) ...[
                 Icon(
-                  Icons.error_outline,
+                  Symbols.error_outline,
                   size: 64,
                   color: theme.colorScheme.error,
                 ),

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:m3e_core/m3e_core.dart';
+import 'package:material_symbols_icons/symbols.dart';
 
 import '../../app/providers.dart';
 import '../../core/navigation/predictive_back_shared_element.dart';
@@ -140,7 +141,7 @@ class _HomePageState extends ConsumerState<HomePage> {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(
-                Icons.mail_outline,
+                Symbols.mail_outline,
                 size: 120,
                 color: theme.colorScheme.primary.withValues(alpha: 0.5),
               ),
@@ -156,7 +157,7 @@ class _HomePageState extends ConsumerState<HomePage> {
               const SizedBox(height: 32),
               FilledButton.icon(
                 onPressed: () => context.push('/onboarding/add'),
-                icon: const Icon(Icons.add),
+                icon: const Icon(Symbols.add),
                 label: const Text('添加账户'),
               ),
             ],
@@ -219,7 +220,7 @@ class _HomePageState extends ConsumerState<HomePage> {
         onPressed: () {
           // TODO: 撰写邮件
         },
-        child: const Icon(Icons.edit),
+        child: const Icon(Symbols.edit),
       ),
     );
   }
@@ -279,7 +280,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                   borderRadius: context.shapes.medium,
                 ),
                 child: Icon(
-                  Icons.mark_email_unread_rounded,
+                  Symbols.mark_email_unread_rounded,
                   color: colors.onPrimaryContainer,
                 ),
               ),
@@ -486,7 +487,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                     duration: context.motion.short,
                     curve: context.motion.standard,
                     child: Icon(
-                      Icons.keyboard_arrow_down_rounded,
+                      Symbols.keyboard_arrow_down_rounded,
                       color: colors.onSurfaceVariant,
                     ),
                   ),
@@ -690,7 +691,7 @@ class _HomePageState extends ConsumerState<HomePage> {
           ),
           if (selected) ...[
             const SizedBox(width: 12),
-            Icon(Icons.check_rounded, color: colors.onSecondaryContainer),
+            Icon(Symbols.check_rounded, color: colors.onSecondaryContainer),
           ],
         ],
       ),
@@ -820,14 +821,14 @@ class _HomePageState extends ConsumerState<HomePage> {
             if (index == 0) {
               return _buildDrawerRow(
                 context,
-                icon: Icons.add_circle_outline_rounded,
+                icon: Symbols.add_circle_outline_rounded,
                 title: '添加账户',
               );
             }
 
             return _buildDrawerRow(
               context,
-              icon: Icons.settings_outlined,
+              icon: Symbols.settings,
               title: '设置',
             );
           },
@@ -862,7 +863,7 @@ class _HomePageState extends ConsumerState<HomePage> {
             itemBuilder: (context, index) {
               return _buildDrawerRow(
                 context,
-                icon: Icons.folder_off_outlined,
+                icon: Symbols.folder_off,
                 title: '暂无文件夹',
                 compact: true,
                 enabled: false,
@@ -1019,7 +1020,7 @@ class _HomePageState extends ConsumerState<HomePage> {
         backgroundColor: color,
         radius: radius,
         child: Icon(
-          Icons.all_inbox_rounded,
+          Symbols.all_inbox_rounded,
           color: Colors.white,
           size: radius * 1.08,
         ),
@@ -1081,19 +1082,19 @@ class _HomePageState extends ConsumerState<HomePage> {
   IconData _getFolderIcon(FolderType type) {
     switch (type) {
       case FolderType.inbox:
-        return Icons.inbox;
+        return Symbols.inbox;
       case FolderType.sent:
-        return Icons.send;
+        return Symbols.send;
       case FolderType.drafts:
-        return Icons.drafts;
+        return Symbols.drafts;
       case FolderType.archive:
-        return Icons.archive;
+        return Symbols.archive;
       case FolderType.spam:
-        return Icons.report;
+        return Symbols.report;
       case FolderType.trash:
-        return Icons.delete;
+        return Symbols.delete;
       case FolderType.custom:
-        return Icons.folder;
+        return Symbols.folder;
     }
   }
 
@@ -1340,7 +1341,7 @@ class _MessageListState extends ConsumerState<_MessageList> {
                 )
               : null,
           leading: IconButton(
-            icon: Icon(selectionMode ? Icons.close : Icons.menu),
+            icon: Icon(selectionMode ? Symbols.close : Symbols.menu),
             tooltip: selectionMode ? '取消选择' : '菜单',
             onPressed: selectionMode ? _clearSelection : onMenuTap,
           ),
@@ -1349,13 +1350,16 @@ class _MessageListState extends ConsumerState<_MessageList> {
               : _buildAppBarTitle(theme),
           actions: [
             if (!selectionMode)
-              IconButton(icon: const Icon(Icons.search), onPressed: onSearchTap)
+              IconButton(
+                icon: const Icon(Symbols.search),
+                onPressed: onSearchTap,
+              )
             else ...[
               IconButton(
                 icon: Icon(
                   markSelectionAsRead
-                      ? Icons.mark_email_read_outlined
-                      : Icons.mark_email_unread_outlined,
+                      ? Symbols.mark_email_read
+                      : Symbols.mark_email_unread,
                 ),
                 tooltip: markSelectionAsRead ? '标为已读' : '标为未读',
                 onPressed: selectedMessages.isEmpty || _batchInProgress
@@ -1367,7 +1371,7 @@ class _MessageListState extends ConsumerState<_MessageList> {
                       ),
               ),
               IconButton(
-                icon: const Icon(Icons.delete_outline),
+                icon: const Icon(Symbols.delete_outline),
                 tooltip: '删除',
                 onPressed: selectedMessages.isEmpty || _batchInProgress
                     ? null
@@ -1376,7 +1380,7 @@ class _MessageListState extends ConsumerState<_MessageList> {
             ],
             PopupMenuButton<_MessageListMenuAction>(
               tooltip: '更多',
-              icon: const Icon(Icons.more_vert),
+              icon: const Icon(Symbols.more_vert),
               onSelected: (value) =>
                   _handleMenuAction(context, visibleMessages, value),
               itemBuilder: (context) => selectionMode
@@ -1398,11 +1402,7 @@ class _MessageListState extends ConsumerState<_MessageList> {
         value: _MessageListMenuAction.selectAll,
         enabled: visibleMessages.isNotEmpty,
         child: const Row(
-          children: [
-            Icon(Icons.select_all_outlined),
-            SizedBox(width: 12),
-            Text('全选'),
-          ],
+          children: [Icon(Symbols.select_all), SizedBox(width: 12), Text('全选')],
         ),
       ),
       PopupMenuItem<_MessageListMenuAction>(
@@ -1410,7 +1410,7 @@ class _MessageListState extends ConsumerState<_MessageList> {
         enabled: hasUnread && !_batchInProgress,
         child: const Row(
           children: [
-            Icon(Icons.mark_email_read_outlined),
+            Icon(Symbols.mark_email_read),
             SizedBox(width: 12),
             Text('全部标为已读'),
           ],
@@ -1422,7 +1422,7 @@ class _MessageListState extends ConsumerState<_MessageList> {
           value: _MessageListMenuAction.repairFolder,
           child: Row(
             children: [
-              Icon(Icons.sync_problem_outlined),
+              Icon(Symbols.sync_problem),
               SizedBox(width: 12),
               Text('重新同步此文件夹'),
             ],
@@ -1447,22 +1447,14 @@ class _MessageListState extends ConsumerState<_MessageList> {
         value: _MessageListMenuAction.selectAll,
         enabled: visibleMessages.isNotEmpty && !allVisibleSelected,
         child: const Row(
-          children: [
-            Icon(Icons.select_all_outlined),
-            SizedBox(width: 12),
-            Text('全选'),
-          ],
+          children: [Icon(Symbols.select_all), SizedBox(width: 12), Text('全选')],
         ),
       ),
       PopupMenuItem<_MessageListMenuAction>(
         value: _MessageListMenuAction.archiveSelected,
         enabled: enabled,
         child: const Row(
-          children: [
-            Icon(Icons.archive_outlined),
-            SizedBox(width: 12),
-            Text('归档'),
-          ],
+          children: [Icon(Symbols.archive), SizedBox(width: 12), Text('归档')],
         ),
       ),
       PopupMenuItem<_MessageListMenuAction>(
@@ -1470,7 +1462,7 @@ class _MessageListState extends ConsumerState<_MessageList> {
         enabled: enabled,
         child: const Row(
           children: [
-            Icon(Icons.star_border_outlined),
+            Icon(Symbols.star_border),
             SizedBox(width: 12),
             Text('加星标'),
           ],
@@ -1481,7 +1473,7 @@ class _MessageListState extends ConsumerState<_MessageList> {
         enabled: enabled,
         child: const Row(
           children: [
-            Icon(Icons.star_outline),
+            Icon(Symbols.star_outline),
             SizedBox(width: 12),
             Text('取消星标'),
           ],
@@ -1491,7 +1483,7 @@ class _MessageListState extends ConsumerState<_MessageList> {
       const PopupMenuItem<_MessageListMenuAction>(
         value: _MessageListMenuAction.clearSelection,
         child: Row(
-          children: [Icon(Icons.close), SizedBox(width: 12), Text('取消选择')],
+          children: [Icon(Symbols.close), SizedBox(width: 12), Text('取消选择')],
         ),
       ),
     ];
@@ -2383,7 +2375,11 @@ class _MessageListState extends ConsumerState<_MessageList> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.error_outline, size: 64, color: theme.colorScheme.error),
+            Icon(
+              Symbols.error_outline,
+              size: 64,
+              color: theme.colorScheme.error,
+            ),
             const SizedBox(height: 16),
             Text('加载失败', style: theme.textTheme.bodyLarge),
             const SizedBox(height: 8),
@@ -2411,7 +2407,7 @@ class _MessageListState extends ConsumerState<_MessageList> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(
-              Icons.inbox_outlined,
+              Symbols.inbox,
               size: 64,
               color: theme.colorScheme.onSurfaceVariant,
             ),

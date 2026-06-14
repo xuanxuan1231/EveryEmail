@@ -2,6 +2,7 @@ import 'package:drift/drift.dart' hide Column;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:material_symbols_icons/symbols.dart';
 
 import '../../app/providers.dart';
 import '../../core/utils/id_generator.dart';
@@ -14,10 +15,7 @@ import '../../domain/models/account_config.dart';
 ///
 /// 用户手动输入 IMAP/SMTP 服务器配置。
 class ManualSetupPage extends ConsumerStatefulWidget {
-  const ManualSetupPage({
-    required this.email,
-    super.key,
-  });
+  const ManualSetupPage({required this.email, super.key});
 
   final String email;
 
@@ -29,8 +27,9 @@ class _ManualSetupPageState extends ConsumerState<ManualSetupPage> {
   final _formKey = GlobalKey<FormState>();
 
   // 登录名（IMAP 用户名，默认等于邮箱）
-  late final TextEditingController _loginNameController =
-      TextEditingController(text: widget.email);
+  late final TextEditingController _loginNameController = TextEditingController(
+    text: widget.email,
+  );
 
   // IMAP 配置
   final _imapHostController = TextEditingController();
@@ -72,7 +71,9 @@ class _ManualSetupPageState extends ConsumerState<ManualSetupPage> {
 
     try {
       final imapPassword = _imapPasswordController.text;
-      final smtpPassword = _useSamePassword ? imapPassword : _smtpPasswordController.text;
+      final smtpPassword = _useSamePassword
+          ? imapPassword
+          : _smtpPasswordController.text;
 
       final tokenStore = ref.read(tokenStoreProvider);
       final db = ref.read(databaseProvider);
@@ -140,7 +141,9 @@ class _ManualSetupPageState extends ConsumerState<ManualSetupPage> {
 
       // 6. 导航到同步配置页面
       if (mounted) {
-        context.push('/onboarding/sync-config?email=${Uri.encodeComponent(widget.email)}&accountId=${Uri.encodeComponent(accountId)}');
+        context.push(
+          '/onboarding/sync-config?email=${Uri.encodeComponent(widget.email)}&accountId=${Uri.encodeComponent(accountId)}',
+        );
       }
     } catch (e) {
       setState(() {
@@ -169,19 +172,14 @@ class _ManualSetupPageState extends ConsumerState<ManualSetupPage> {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('手动设置'),
-      ),
+      appBar: AppBar(title: const Text('手动设置')),
       body: Form(
         key: _formKey,
         child: ListView(
           padding: const EdgeInsets.all(24.0),
           children: [
             // 邮箱地址
-            Text(
-              widget.email,
-              style: theme.textTheme.headlineSmall,
-            ),
+            Text(widget.email, style: theme.textTheme.headlineSmall),
             const SizedBox(height: 8),
             Text(
               '请输入服务器配置',
@@ -192,10 +190,7 @@ class _ManualSetupPageState extends ConsumerState<ManualSetupPage> {
             const SizedBox(height: 32),
 
             // IMAP 配置
-            Text(
-              'IMAP',
-              style: theme.textTheme.titleMedium,
-            ),
+            Text('IMAP', style: theme.textTheme.titleMedium),
             const SizedBox(height: 16),
 
             TextFormField(
@@ -263,9 +258,11 @@ class _ManualSetupPageState extends ConsumerState<ManualSetupPage> {
                         setState(() {
                           _imapSocketType = value;
                           // 自动调整端口
-                          if (value == SocketType.ssl && _imapPortController.text == '143') {
+                          if (value == SocketType.ssl &&
+                              _imapPortController.text == '143') {
                             _imapPortController.text = '993';
-                          } else if (value == SocketType.starttls && _imapPortController.text == '993') {
+                          } else if (value == SocketType.starttls &&
+                              _imapPortController.text == '993') {
                             _imapPortController.text = '143';
                           }
                         });
@@ -279,10 +276,7 @@ class _ManualSetupPageState extends ConsumerState<ManualSetupPage> {
             const SizedBox(height: 32),
 
             // SMTP 配置
-            Text(
-              'SMTP',
-              style: theme.textTheme.titleMedium,
-            ),
+            Text('SMTP', style: theme.textTheme.titleMedium),
             const SizedBox(height: 16),
 
             TextFormField(
@@ -353,9 +347,11 @@ class _ManualSetupPageState extends ConsumerState<ManualSetupPage> {
                             if (value != null) {
                               setState(() {
                                 _smtpSocketType = value;
-                                if (value == SocketType.ssl && _smtpPortController.text == '587') {
+                                if (value == SocketType.ssl &&
+                                    _smtpPortController.text == '587') {
                                   _smtpPortController.text = '465';
-                                } else if (value == SocketType.starttls && _smtpPortController.text == '465') {
+                                } else if (value == SocketType.starttls &&
+                                    _smtpPortController.text == '465') {
                                   _smtpPortController.text = '587';
                                 }
                               });
@@ -369,10 +365,7 @@ class _ManualSetupPageState extends ConsumerState<ManualSetupPage> {
             const SizedBox(height: 32),
 
             // 密码配置
-            Text(
-              '登录凭据',
-              style: theme.textTheme.titleMedium,
-            ),
+            Text('登录凭据', style: theme.textTheme.titleMedium),
             const SizedBox(height: 16),
 
             TextFormField(
@@ -380,7 +373,7 @@ class _ManualSetupPageState extends ConsumerState<ManualSetupPage> {
               decoration: const InputDecoration(
                 labelText: '登录名',
                 hintText: '通常为完整邮箱地址',
-                prefixIcon: Icon(Icons.person_outline),
+                prefixIcon: Icon(Symbols.person_outline),
                 border: OutlineInputBorder(),
               ),
               validator: (value) {
@@ -399,10 +392,12 @@ class _ManualSetupPageState extends ConsumerState<ManualSetupPage> {
               decoration: InputDecoration(
                 labelText: 'IMAP 密码',
                 hintText: '输入邮箱密码',
-                prefixIcon: const Icon(Icons.lock_outline),
+                prefixIcon: const Icon(Symbols.lock_outline),
                 suffixIcon: IconButton(
                   icon: Icon(
-                    _obscureImapPassword ? Icons.visibility : Icons.visibility_off,
+                    _obscureImapPassword
+                        ? Symbols.visibility
+                        : Symbols.visibility_off,
                   ),
                   onPressed: () {
                     setState(() {
@@ -444,10 +439,12 @@ class _ManualSetupPageState extends ConsumerState<ManualSetupPage> {
                 decoration: InputDecoration(
                   labelText: 'SMTP 密码',
                   hintText: '输入 SMTP 密码',
-                  prefixIcon: const Icon(Icons.lock_outline),
+                  prefixIcon: const Icon(Symbols.lock_outline),
                   suffixIcon: IconButton(
                     icon: Icon(
-                      _obscureSmtpPassword ? Icons.visibility : Icons.visibility_off,
+                      _obscureSmtpPassword
+                          ? Symbols.visibility
+                          : Symbols.visibility_off,
                     ),
                     onPressed: () {
                       setState(() {
@@ -486,10 +483,7 @@ class _ManualSetupPageState extends ConsumerState<ManualSetupPage> {
                 ),
                 child: Row(
                   children: [
-                    Icon(
-                      Icons.error_outline,
-                      color: theme.colorScheme.error,
-                    ),
+                    Icon(Symbols.error_outline, color: theme.colorScheme.error),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(
@@ -517,7 +511,7 @@ class _ManualSetupPageState extends ConsumerState<ManualSetupPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Icon(
-                    Icons.info_outline,
+                    Symbols.info,
                     size: 20,
                     color: theme.colorScheme.onSurfaceVariant,
                   ),

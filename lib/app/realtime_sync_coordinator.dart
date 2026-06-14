@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/platform/imap_foreground_service.dart';
 import '../data/settings/imap_realtime_settings.dart';
 import '../data/settings/account_settings.dart';
 import '../data/sync/realtime_sync_service.dart';
@@ -16,7 +17,8 @@ import 'providers.dart';
 /// 挂在 [FcmBootstrap] 同层（ProviderScope 内、MaterialApp 上）。职责：
 /// - 应用回到前台/启动：对所有账户做一次兜底同步；并为 IMAP 账户启动实时机制
 ///   （IDLE 或前台自适应轮询，由 [ImapRealtimeSettings] 决定）。
-/// - 进入后台：停止所有 IDLE/轮询，省电、释放长连接。
+/// - Android 进入后台：启动前台服务后继续保持 IMAP 实时连接；若服务不可用则停止
+///   IDLE/轮询，等待回前台兜底同步。
 ///
 /// Graph 账户**不轮询**——靠 FCM 静默数据消息推送触发同步，这里只做一次兜底
 /// （捕获应用被杀期间漏掉的 updated 推送）。
@@ -71,11 +73,13 @@ class _RealtimeSyncCoordinatorState
     super.didChangeAppLifecycleState(state);
     switch (state) {
       case AppLifecycleState.resumed:
-        unawaited(_start());
+        unawaited(_resumeForeground());
         break;
       case AppLifecycleState.paused:
-      case AppLifecycleState.detached:
       case AppLifecycleState.hidden:
+        unawaited(_enterBackground());
+        break;
+      case AppLifecycleState.detached:
         unawaited(_stop());
         break;
       case AppLifecycleState.inactive:
@@ -87,6 +91,7 @@ class _RealtimeSyncCoordinatorState
     if (_active) return;
     _active = true;
     final gen = ++_generation;
+    unawaited(ImapForegroundService.stop());
 
     // 启动周期刷新（持续前台时让 OAuth 长连接在 token 过期前重连）。pause 时 _stop 取消。
     _refreshTimer ??= Timer.periodic(
@@ -106,6 +111,7 @@ class _RealtimeSyncCoordinatorState
       rows = await db.accountDao.getAccounts();
     } catch (e) {
       debugPrint('RealtimeSyncCoordinator: 读取账户失败: $e');
+      _active = false;
       return;
     }
     if (gen != _generation) return; // 期间已 stop
@@ -155,13 +161,16 @@ class _RealtimeSyncCoordinatorState
     }
 
     // IMAP：按账户设置启动 IDLE（默认）或前台自适应轮询。
-    final mode = await ImapRealtimeSettings.readForAccount(account.id);
+    final realtimeConfig = await ImapRealtimeSettings.readConfigForAccount(
+      account.id,
+    );
     if (gen != _generation) return;
 
-    if (mode == ImapRealtimeMode.polling) {
+    if (realtimeConfig.mode == ImapRealtimeMode.polling) {
       final poller = RealtimeSyncService(syncService);
       _pollers[account.id] = poller;
-      poller.start(account); // 内部立即同步一次 + 自适应定时
+      // 内部立即同步一次 + 自适应定时。
+      poller.start(account, interval: realtimeConfig.pollingInterval);
       return;
     }
 
@@ -183,6 +192,7 @@ class _RealtimeSyncCoordinatorState
   Future<void> _stop() async {
     _active = false;
     _generation++;
+    await ImapForegroundService.stop();
     _refreshTimer?.cancel();
     _refreshTimer = null;
     for (final sub in _idleSubs.values) {
@@ -193,6 +203,55 @@ class _RealtimeSyncCoordinatorState
       poller.stop();
     }
     _pollers.clear();
+  }
+
+  Future<void> _enterBackground() async {
+    if (!_active) return;
+
+    final realtimeAccountCount = _idleSubs.length + _pollers.length;
+    if (realtimeAccountCount == 0) {
+      await _stop();
+      return;
+    }
+
+    final serviceStarted = await ImapForegroundService.start(
+      accountCount: realtimeAccountCount,
+    );
+    if (!serviceStarted) {
+      // 无法启动前台服务时不要在后台裸跑长连接；回前台会重新 start 并兜底同步。
+      await _stop();
+    }
+  }
+
+  Future<void> _resumeForeground() async {
+    await ImapForegroundService.stop();
+    if (!_active) {
+      await _start();
+      return;
+    }
+
+    await _refreshStaleConnections();
+    await _requestSyncForAllAccounts();
+  }
+
+  Future<void> _requestSyncForAllAccounts() async {
+    final syncService = ref.read(syncServiceProvider);
+    final db = ref.read(databaseProvider);
+    try {
+      final rows = await db.accountDao.getAccounts();
+      for (final row in rows) {
+        final account = await syncService.accountConfigFor(row.id);
+        syncService.requestSync(account);
+      }
+    } catch (e) {
+      debugPrint('RealtimeSyncCoordinator: 恢复前台兜底同步失败: $e');
+    }
+  }
+
+  Future<void> _restartForSettingsChange() async {
+    if (!_active) return;
+    await _stop();
+    await _start();
   }
 
   /// 周期刷新：持续前台时，IDLE 长连接一旦超过 OAuth 新鲜期就主动重连刷新 token
@@ -247,5 +306,10 @@ class _RealtimeSyncCoordinatorState
   }
 
   @override
-  Widget build(BuildContext context) => widget.child;
+  Widget build(BuildContext context) {
+    ref.listen<int>(realtimeSyncSettingsRevisionProvider, (_, _) {
+      unawaited(_restartForSettingsChange());
+    });
+    return widget.child;
+  }
 }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:material_symbols_icons/symbols.dart';
 
 import '../../../app/providers.dart';
 import '../../../data/local/database/app_database.dart';
@@ -91,7 +92,7 @@ class _MessageHeaderTileState extends ConsumerState<MessageHeaderTile> {
                   if (!collapsed) ...[
                     const SizedBox(width: 4),
                     _buildActionButton(
-                      icon: Icons.reply,
+                      icon: Symbols.reply,
                       tooltip: '回复',
                       onPressed: () => _notImplemented('回复'),
                     ),
@@ -119,7 +120,11 @@ class _MessageHeaderTileState extends ConsumerState<MessageHeaderTile> {
 
   // —— 首行：头像 + 摘要 + 按钮 ——
 
-  Widget _buildSummary(ThemeData theme, List<MailRecipient> to, bool collapsed) {
+  Widget _buildSummary(
+    ThemeData theme,
+    List<MailRecipient> to,
+    bool collapsed,
+  ) {
     final colors = theme.colorScheme;
 
     return Column(
@@ -167,7 +172,8 @@ class _MessageHeaderTileState extends ConsumerState<MessageHeaderTile> {
           )
         else
           InkWell(
-            onTap: () => setState(() => _recipientExpanded = !_recipientExpanded),
+            onTap: () =>
+                setState(() => _recipientExpanded = !_recipientExpanded),
             borderRadius: BorderRadius.circular(4),
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 2),
@@ -188,7 +194,7 @@ class _MessageHeaderTileState extends ConsumerState<MessageHeaderTile> {
                     turns: _recipientExpanded ? 0.5 : 0,
                     duration: const Duration(milliseconds: 180),
                     child: Icon(
-                      Icons.expand_more,
+                      Symbols.expand_more,
                       size: 18,
                       color: colors.onSurfaceVariant,
                     ),
@@ -218,7 +224,7 @@ class _MessageHeaderTileState extends ConsumerState<MessageHeaderTile> {
 
   Widget _buildMoreButton({required bool isFlagged}) {
     return PopupMenuButton<String>(
-      icon: const Icon(Icons.more_vert),
+      icon: const Icon(Symbols.more_vert),
       iconSize: 22,
       tooltip: '更多',
       onSelected: (value) {
@@ -235,18 +241,14 @@ class _MessageHeaderTileState extends ConsumerState<MessageHeaderTile> {
         const PopupMenuItem(
           value: 'forward',
           child: Row(
-            children: [
-              Icon(Icons.forward_outlined),
-              SizedBox(width: 12),
-              Text('转发'),
-            ],
+            children: [Icon(Symbols.forward), SizedBox(width: 12), Text('转发')],
           ),
         ),
         PopupMenuItem(
           value: 'star',
           child: Row(
             children: [
-              Icon(isFlagged ? Icons.star : Icons.star_border),
+              Icon(isFlagged ? Symbols.star : Symbols.star_border),
               const SizedBox(width: 12),
               Text(isFlagged ? '取消星标' : '星标'),
             ],
@@ -255,11 +257,7 @@ class _MessageHeaderTileState extends ConsumerState<MessageHeaderTile> {
         const PopupMenuItem(
           value: 'print',
           child: Row(
-            children: [
-              Icon(Icons.print_outlined),
-              SizedBox(width: 12),
-              Text('打印'),
-            ],
+            children: [Icon(Symbols.print), SizedBox(width: 12), Text('打印')],
           ),
         ),
       ],
@@ -278,9 +276,7 @@ class _MessageHeaderTileState extends ConsumerState<MessageHeaderTile> {
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest.withValues(
-          alpha: 0.5,
-        ),
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
@@ -344,9 +340,9 @@ class _MessageHeaderTileState extends ConsumerState<MessageHeaderTile> {
             value: !isFlagged,
           );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(isFlagged ? '已取消星标' : '已加星标')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(isFlagged ? '已取消星标' : '已加星标')));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(

@@ -1,5 +1,6 @@
 import 'package:drift/drift.dart';
 
+import '../../../../domain/enums/account_enums.dart';
 import '../app_database.dart';
 import '../tables.dart';
 
@@ -52,6 +53,29 @@ class AccountDao extends DatabaseAccessor<AppDatabase> with _$AccountDaoMixin {
             ? const Value.absent()
             : Value(displayName),
         colorValue: colorValue,
+      ),
+    );
+  }
+
+  Future<void> updateServerConfig(
+    String id, {
+    Value<String?> loginName = const Value.absent(),
+    Value<String?> imapHost = const Value.absent(),
+    Value<int?> imapPort = const Value.absent(),
+    Value<SocketType?> imapSocketType = const Value.absent(),
+    Value<String?> smtpHost = const Value.absent(),
+    Value<int?> smtpPort = const Value.absent(),
+    Value<SocketType?> smtpSocketType = const Value.absent(),
+  }) {
+    return (update(accounts)..where((t) => t.id.equals(id))).write(
+      AccountsCompanion(
+        loginName: loginName,
+        imapHost: imapHost,
+        imapPort: imapPort,
+        imapSocketType: imapSocketType,
+        smtpHost: smtpHost,
+        smtpPort: smtpPort,
+        smtpSocketType: smtpSocketType,
       ),
     );
   }

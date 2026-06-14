@@ -8,8 +8,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html_parser;
-import 'package:webview_flutter_android/webview_flutter_android.dart';
+import 'package:material_symbols_icons/symbols.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
 import '../../../core/navigation/predictive_back_transition_scope.dart';
@@ -568,7 +569,7 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
       if (target.isBlockedRemoteImage && !_loadRemoteImages) {
         actions.add(
           _EmailHtmlContextAction(
-            icon: Icons.image_outlined,
+            icon: Symbols.image,
             label: '加载图片',
             run: _enableRemoteImages,
           ),
@@ -579,7 +580,7 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
         if (_canOpenImageUrl(imageUrl)) {
           actions.add(
             _EmailHtmlContextAction(
-              icon: Icons.open_in_new,
+              icon: Symbols.open_in_new,
               label: '打开图片',
               run: () => _openExternalUrl(imageUrl),
             ),
@@ -587,7 +588,7 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
         }
         actions.add(
           _EmailHtmlContextAction(
-            icon: Icons.content_copy,
+            icon: Symbols.content_copy,
             label: '复制图片地址',
             run: () => _copyText(imageUrl, '已复制图片地址'),
           ),
@@ -599,7 +600,7 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
       if (_canOpenExternalUrl(linkUrl)) {
         actions.add(
           _EmailHtmlContextAction(
-            icon: Icons.open_in_new,
+            icon: Symbols.open_in_new,
             label: '打开链接',
             run: () => _openExternalUrl(linkUrl),
           ),
@@ -607,7 +608,7 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
       }
       actions.add(
         _EmailHtmlContextAction(
-          icon: Icons.link,
+          icon: Symbols.link,
           label: '复制链接',
           run: () => _copyText(linkUrl, '已复制链接'),
         ),
@@ -617,7 +618,7 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
     if (text != null) {
       actions.add(
         _EmailHtmlContextAction(
-          icon: Icons.text_fields,
+          icon: Symbols.text_fields,
           label: '复制文本',
           run: () => _copyText(text, '已复制文本'),
         ),
@@ -1070,7 +1071,7 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
           child: Row(
             children: [
               Icon(
-                Icons.image_not_supported_outlined,
+                Symbols.image_not_supported,
                 color: theme.colorScheme.onSurfaceVariant,
               ),
               const SizedBox(width: 12),
@@ -1107,7 +1108,7 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
           child: Row(
             children: [
               Icon(
-                Icons.verified_user_outlined,
+                Symbols.verified_user,
                 color: theme.colorScheme.onSurfaceVariant,
               ),
               const SizedBox(width: 12),
@@ -1126,7 +1127,7 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
                 child: const Text('信任'),
               ),
               IconButton(
-                icon: const Icon(Icons.close),
+                icon: const Icon(Symbols.close),
                 iconSize: 18,
                 tooltip: '关闭',
                 onPressed: () => setState(() => _trustOfferVisible = false),
@@ -1195,7 +1196,7 @@ class _MessageHtmlViewState extends State<MessageHtmlView>
               mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(
-                  Icons.web_asset_off_outlined,
+                  Symbols.web_asset_off,
                   size: 40,
                   color: widget.foregroundColor.withValues(alpha: 0.65),
                 ),
@@ -1636,7 +1637,9 @@ class _EmailHtmlDocument {
     );
     final link = _cssColor(useInvertFilter ? _lightLinkValue : linkColorValue);
     final border = _cssColor(
-      useInvertFilter ? _preInvertForFilter(borderColorValue) : borderColorValue,
+      useInvertFilter
+          ? _preInvertForFilter(borderColorValue)
+          : borderColorValue,
     );
     final scriptNonce = _createCspNonce();
     final imageSources = loadRemoteImages
@@ -2288,7 +2291,10 @@ class _EmailHtmlDocument {
   /// Whether a blocked image declares a width we can reserve, so its placeholder
   /// keeps that width instead of being floored to the dimensionless min-width.
   bool _hasUsableWidth(dom.Element element) {
-    return _isReservableLength(element.attributes['width'], allowPercent: true) ||
+    return _isReservableLength(
+          element.attributes['width'],
+          allowPercent: true,
+        ) ||
         _styleDeclaresLength(
           element.attributes['style'],
           'width',
@@ -2300,7 +2306,10 @@ class _EmailHtmlDocument {
   /// attribute counts even with inline `height:auto`, since paired with a width
   /// attribute the browser maps it to an aspect-ratio that reserves the box.
   bool _hasUsableHeight(dom.Element element) {
-    return _isReservableLength(element.attributes['height'], allowPercent: false) ||
+    return _isReservableLength(
+          element.attributes['height'],
+          allowPercent: false,
+        ) ||
         _styleDeclaresLength(
           element.attributes['style'],
           'height',

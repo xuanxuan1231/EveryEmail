@@ -19,6 +19,7 @@ class RealtimeSyncService {
 
   final SyncService _syncService;
   Timer? _syncTimer;
+  Duration _fastInterval = foregroundInterval;
   Duration _currentInterval = const Duration(seconds: 30);
   AccountConfig? _currentAccount;
   int _consecutiveEmptySyncs = 0;
@@ -34,7 +35,8 @@ class RealtimeSyncService {
     stop(); // 停止现有的定时器
 
     _currentAccount = account;
-    _currentInterval = interval ?? foregroundInterval;
+    _fastInterval = _clampInterval(interval ?? foregroundInterval);
+    _currentInterval = _fastInterval;
 
     debugPrint('=== 启动实时同步 ===');
     debugPrint('账户: ${account.email}');
@@ -43,10 +45,7 @@ class RealtimeSyncService {
     // 立即执行一次同步
     _performSync();
 
-    // 启动定时器
-    _syncTimer = Timer.periodic(_currentInterval, (timer) {
-      _performSync();
-    });
+    _restartTimer();
   }
 
   /// 执行同步。
@@ -97,28 +96,26 @@ class RealtimeSyncService {
     );
 
     if (newInterval != _currentInterval) {
-      debugPrint('降低同步频率: ${_currentInterval.inSeconds}s → ${newInterval.inSeconds}s');
+      debugPrint(
+        '降低同步频率: ${_currentInterval.inSeconds}s → ${newInterval.inSeconds}s',
+      );
       _currentInterval = newInterval;
       _consecutiveEmptySyncs = 0;
 
-      // 重启定时器
-      if (_currentAccount != null) {
-        start(_currentAccount!, interval: _currentInterval);
-      }
+      _restartTimer();
     }
   }
 
   /// 加快同步频率（有新邮件时）。
   void speedUp() {
-    if (_currentInterval != foregroundInterval) {
-      debugPrint('加快同步频率: ${_currentInterval.inSeconds}s → ${foregroundInterval.inSeconds}s');
-      _currentInterval = foregroundInterval;
+    if (_currentInterval != _fastInterval) {
+      debugPrint(
+        '加快同步频率: ${_currentInterval.inSeconds}s → ${_fastInterval.inSeconds}s',
+      );
+      _currentInterval = _fastInterval;
       _consecutiveEmptySyncs = 0;
 
-      // 重启定时器
-      if (_currentAccount != null) {
-        start(_currentAccount!, interval: _currentInterval);
-      }
+      _restartTimer();
     }
   }
 
@@ -126,7 +123,8 @@ class RealtimeSyncService {
   void switchToForeground() {
     if (_currentAccount != null) {
       debugPrint('切换到前台同步模式');
-      start(_currentAccount!, interval: foregroundInterval);
+      _currentInterval = _fastInterval;
+      _restartTimer();
     }
   }
 
@@ -134,7 +132,11 @@ class RealtimeSyncService {
   void switchToBackground() {
     if (_currentAccount != null) {
       debugPrint('切换到后台同步模式');
-      start(_currentAccount!, interval: backgroundInterval);
+      final background = Duration(
+        seconds: max(_fastInterval.inSeconds, backgroundInterval.inSeconds),
+      );
+      _currentInterval = _clampInterval(background);
+      _restartTimer();
     }
   }
 
@@ -162,12 +164,26 @@ class RealtimeSyncService {
 
   /// 当前同步间隔。
   Duration get currentInterval => _currentInterval;
+
+  void _restartTimer() {
+    _syncTimer?.cancel();
+    _syncTimer = Timer.periodic(_currentInterval, (_) {
+      _performSync();
+    });
+  }
+
+  Duration _clampInterval(Duration interval) {
+    if (interval < minInterval) return minInterval;
+    if (interval > maxInterval) return maxInterval;
+    return interval;
+  }
 }
 
 /// 实时同步管理器 Mixin。
 ///
 /// 在 StatefulWidget 中使用，自动管理实时同步的生命周期。
-mixin RealtimeSyncManager<T extends StatefulWidget> on State<T>, WidgetsBindingObserver {
+mixin RealtimeSyncManager<T extends StatefulWidget>
+    on State<T>, WidgetsBindingObserver {
   RealtimeSyncService? _realtimeSyncService;
 
   /// 初始化实时同步。

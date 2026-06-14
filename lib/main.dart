@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app/app.dart';
@@ -10,6 +11,7 @@ import 'core/platform/webview_warmer.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  FlutterForegroundTask.initCommunicationPort();
 
   // bootstrap 是 UI 真正依赖的初始化；Firebase / FCM 由 FcmBootstrap 在 runApp 之后异步处理，
   // 否则 Play Services 异常或离线时会让首屏黑屏。

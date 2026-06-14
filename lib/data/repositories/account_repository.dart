@@ -12,6 +12,7 @@ import '../local/database/app_database.dart';
 import '../local/file_store.dart';
 import '../secure/token_store.dart';
 import '../settings/account_settings.dart';
+import '../settings/imap_realtime_settings.dart';
 import '../webhook/gmail_watch_manager.dart';
 import '../webhook/webhook_manager.dart';
 
@@ -157,6 +158,43 @@ class AccountRepository {
     );
   }
 
+  /// 更新账户的服务器连接配置。
+  ///
+  /// 仅 IMAP 账户需要这组配置；Gmail 与 Microsoft 当前分别走 Gmail API / Graph。
+  Future<void> updateServerConfig(
+    String accountId, {
+    required ServerConfig imap,
+    required ServerConfig smtp,
+    required String loginName,
+  }) async {
+    final account = await _db.accountDao.getAccount(accountId);
+    if (account == null) {
+      throw StateError('账户不存在: $accountId');
+    }
+    if (account.accountType != AccountType.genericImap) {
+      throw StateError('只有通用 IMAP 账户支持修改服务器配置');
+    }
+
+    final normalizedLoginName = loginName.trim();
+    if (normalizedLoginName.isEmpty) {
+      throw ArgumentError.value(loginName, 'loginName', '登录名不能为空');
+    }
+
+    final normalizedImap = _normalizeServerConfig(imap, 'IMAP');
+    final normalizedSmtp = _normalizeServerConfig(smtp, 'SMTP');
+
+    await _db.accountDao.updateServerConfig(
+      accountId,
+      loginName: Value(normalizedLoginName),
+      imapHost: Value(normalizedImap.host),
+      imapPort: Value(normalizedImap.port),
+      imapSocketType: Value(normalizedImap.socketType),
+      smtpHost: Value(normalizedSmtp.host),
+      smtpPort: Value(normalizedSmtp.port),
+      smtpSocketType: Value(normalizedSmtp.socketType),
+    );
+  }
+
   /// 移除账户：拆推送订阅 + 清安全存储 + 级联删除 Drift 行 + 清理本地文件/头像/偏好。
   ///
   /// 删除账户行会随外键级联清掉其文件夹/邮件/正文/同步游标/发件箱。之后的本地文件、
@@ -205,6 +243,11 @@ class AccountRepository {
     } catch (e) {
       // 偏好清理失败忽略：键按 accountId 命名，不会与未来新账户冲突。
     }
+    try {
+      await ImapRealtimeSettings.clearForAccount(accountId);
+    } catch (e) {
+      // IMAP 实时偏好清理失败忽略。
+    }
   }
 
   /// 把 Drift 行映射为领域模型 [AccountConfig]。
@@ -242,5 +285,23 @@ class AccountRepository {
       if (row.sortIndex >= next) next = row.sortIndex + 1;
     }
     return next;
+  }
+
+  static ServerConfig _normalizeServerConfig(
+    ServerConfig config,
+    String label,
+  ) {
+    final host = config.host.trim();
+    if (host.isEmpty) {
+      throw ArgumentError.value(config.host, '$label.host', '服务器地址不能为空');
+    }
+    if (config.port < 1 || config.port > 65535) {
+      throw ArgumentError.value(config.port, '$label.port', '端口范围 1-65535');
+    }
+    return ServerConfig(
+      host: host,
+      port: config.port,
+      socketType: config.socketType,
+    );
   }
 }

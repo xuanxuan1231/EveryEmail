@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:material_symbols_icons/symbols.dart';
 
 import '../../../app/providers.dart';
 import '../../../core/platform/avatar_image_picker.dart';
@@ -31,18 +32,18 @@ class AvatarIconPreset {
 }
 
 const List<AvatarIconPreset> kAvatarIconPresets = [
-  AvatarIconPreset('person', Icons.person_outline_rounded, '个人'),
-  AvatarIconPreset('work', Icons.work_outline_rounded, '工作'),
-  AvatarIconPreset('business', Icons.business_center_outlined, '商务'),
-  AvatarIconPreset('group', Icons.groups_outlined, '团队'),
-  AvatarIconPreset('school', Icons.school_outlined, '学习'),
-  AvatarIconPreset('home', Icons.home_outlined, '家庭'),
-  AvatarIconPreset('code', Icons.code_rounded, '开发'),
-  AvatarIconPreset('shopping', Icons.shopping_bag_outlined, '购物'),
-  AvatarIconPreset('flight', Icons.flight_takeoff_rounded, '旅行'),
-  AvatarIconPreset('star', Icons.star_border_rounded, '星标'),
-  AvatarIconPreset('favorite', Icons.favorite_border_rounded, '关注'),
-  AvatarIconPreset('folder', Icons.folder_outlined, '文件夹'),
+  AvatarIconPreset('person', Symbols.person_outline_rounded, '个人'),
+  AvatarIconPreset('work', Symbols.work_outline_rounded, '工作'),
+  AvatarIconPreset('business', Symbols.business_center, '商务'),
+  AvatarIconPreset('group', Symbols.groups, '团队'),
+  AvatarIconPreset('school', Symbols.school, '学习'),
+  AvatarIconPreset('home', Symbols.home, '家庭'),
+  AvatarIconPreset('code', Symbols.code_rounded, '开发'),
+  AvatarIconPreset('shopping', Symbols.shopping_bag, '购物'),
+  AvatarIconPreset('flight', Symbols.flight_takeoff_rounded, '旅行'),
+  AvatarIconPreset('star', Symbols.star_border_rounded, '星标'),
+  AvatarIconPreset('favorite', Symbols.favorite_border_rounded, '关注'),
+  AvatarIconPreset('folder', Symbols.folder, '文件夹'),
 ];
 
 /// 按 id 查头像预设图标，找不到（含 id 为空）返回 null。
@@ -186,7 +187,7 @@ class AccountColorDot extends StatelessWidget {
             ),
           ),
           child: selected
-              ? Icon(Icons.check_rounded, color: _onColor(color))
+              ? Icon(Symbols.check_rounded, color: _onColor(color))
               : null,
         ),
       ),
@@ -242,7 +243,7 @@ class AvatarIconChoiceButton extends StatelessWidget {
                 Align(
                   alignment: Alignment.topRight,
                   child: Icon(
-                    Icons.check_circle_rounded,
+                    Symbols.check_circle_rounded,
                     size: 18,
                     color: colors.primary,
                   ),
@@ -355,17 +356,17 @@ class _AvatarEditorSheetState extends ConsumerState<AvatarEditorSheet>
               segments: const [
                 ButtonSegment(
                   value: AccountAvatarMode.text,
-                  icon: Icon(Icons.text_fields_rounded),
+                  icon: Icon(Symbols.text_fields_rounded),
                   label: Text('文字'),
                 ),
                 ButtonSegment(
                   value: AccountAvatarMode.icon,
-                  icon: Icon(Icons.emoji_emotions_outlined),
+                  icon: Icon(Symbols.emoji_emotions),
                   label: Text('图标'),
                 ),
                 ButtonSegment(
                   value: AccountAvatarMode.image,
-                  icon: Icon(Icons.image_outlined),
+                  icon: Icon(Symbols.image),
                   label: Text('图片'),
                 ),
               ],
@@ -493,7 +494,7 @@ class _AvatarEditorSheetState extends ConsumerState<AvatarEditorSheet>
                       color: colors.onPrimary,
                     ),
                   )
-                : const Icon(Icons.image_outlined),
+                : const Icon(Symbols.image),
             label: Text(_imagePath == null ? '选择图片' : '更换图片'),
           ),
         ),

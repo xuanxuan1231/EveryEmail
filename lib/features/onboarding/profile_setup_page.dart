@@ -2,6 +2,7 @@ import 'package:drift/drift.dart' show Value;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:material_symbols_icons/symbols.dart';
 
 import '../../app/providers.dart';
 import '../../data/local/database/app_database.dart';
@@ -119,7 +120,7 @@ class _AccountProfileSetupPageState
                       account: account,
                       settings: settings,
                     ),
-                    icon: const Icon(Icons.edit_outlined, size: 18),
+                    icon: const Icon(Symbols.edit, size: 18),
                     label: const Text('编辑头像'),
                   ),
                 ],
@@ -134,7 +135,7 @@ class _AccountProfileSetupPageState
               decoration: const InputDecoration(
                 labelText: '名称',
                 hintText: '账户显示名称',
-                prefixIcon: Icon(Icons.badge_outlined),
+                prefixIcon: Icon(Symbols.badge),
                 border: OutlineInputBorder(),
               ),
               onChanged: (_) => setState(() {}),
@@ -191,7 +192,7 @@ class _AccountProfileSetupPageState
               child: Row(
                 children: [
                   Icon(
-                    Icons.email_outlined,
+                    Symbols.email,
                     size: 20,
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
@@ -203,7 +204,7 @@ class _AccountProfileSetupPageState
                         Text(account.email, style: theme.textTheme.bodyLarge),
                         const SizedBox(height: 2),
                         Text(
-                          '邮箱与服务器设置不可更改',
+                          '邮箱地址不可更改，服务器配置可在账户设置中调整',
                           style: theme.textTheme.bodySmall?.copyWith(
                             color: theme.colorScheme.onSurfaceVariant,
                           ),

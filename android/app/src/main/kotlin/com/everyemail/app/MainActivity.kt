@@ -1,10 +1,14 @@
 package com.everyemail.app
 
+import android.Manifest
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationChannelGroup
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -28,6 +32,7 @@ class MainActivity : FlutterActivity() {
         const val WEBVIEW_SNAPSHOT_CHANNEL = "com.everyemail.app/webview_snapshot"
         const val SYSTEM_SETTINGS_CHANNEL = "com.everyemail.app/system_settings"
         const val NOTIFICATION_CHANNELS_CHANNEL = "com.everyemail.app/notification_channels"
+        const val LOCAL_MAIL_NOTIFICATIONS_CHANNEL = "com.everyemail.app/local_mail_notifications"
 
         // 兜底渠道：缺账户信息时通知仍落到一个有名字的渠道，而非 FCM 自动建的 "Misc"。
         const val FALLBACK_CHANNEL_ID = "everyemail_default"
@@ -70,6 +75,19 @@ class MainActivity : FlutterActivity() {
                 "syncChannels" -> {
                     val accounts = call.argument<List<Map<String, String>>>("accounts") ?: emptyList()
                     syncNotificationChannels(accounts)
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            LOCAL_MAIL_NOTIFICATIONS_CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "showNewMailNotification" -> {
+                    showNewMailNotification(call)
                     result.success(null)
                 }
                 else -> result.notImplemented()
@@ -134,6 +152,93 @@ class MainActivity : FlutterActivity() {
                 manager.deleteNotificationChannelGroup(group.id)
             }
         }
+    }
+
+    // IMAP 本地新邮件通知：不依赖 FCM，由 Dart 同步落库确认“本地新增”后调用。
+    // Android 13+ 用户未授权通知时直接跳过，避免 notify() 抛 SecurityException。
+    private fun showNewMailNotification(call: MethodCall) {
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+
+        val accountId = call.argument<String>("accountId")?.takeIf { it.isNotBlank() } ?: "default"
+        val accountName = call.argument<String>("accountName")?.takeIf { it.isNotBlank() } ?: "EveryEmail"
+        val messageId = call.argument<String>("messageId")?.takeIf { it.isNotBlank() }
+            ?: System.currentTimeMillis().toString()
+        val subject = call.argument<String>("subject")?.takeIf { it.isNotBlank() } ?: "新邮件"
+        val senderName = call.argument<String>("senderName")?.takeIf { it.isNotBlank() }
+        val senderEmail = call.argument<String>("senderEmail")?.takeIf { it.isNotBlank() }
+        val preview = call.argument<String>("preview")?.takeIf { it.isNotBlank() }
+        val playSound = call.argument<Boolean>("playSound") ?: true
+        val enableVibration = call.argument<Boolean>("enableVibration") ?: true
+
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val channelId = ensureAccountMailChannel(manager, accountId, accountName)
+        val contentIntent = PendingIntent.getActivity(
+            this,
+            messageId.hashCode(),
+            Intent(this, MainActivity::class.java).apply {
+                action = Intent.ACTION_MAIN
+                addCategory(Intent.CATEGORY_LAUNCHER)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra("accountId", accountId)
+                putExtra("messageId", messageId)
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        val sender = senderName ?: senderEmail ?: accountName
+        val body = preview ?: senderEmail ?: accountName
+        val notificationBuilder = Notification.Builder(this, channelId)
+            .setSmallIcon(com.everyemail.app.R.drawable.ic_stat_notification)
+            .setContentTitle(sender)
+            .setContentText(subject)
+            .setSubText(accountName)
+            .setStyle(Notification.BigTextStyle().bigText("$subject\n$body"))
+            .setContentIntent(contentIntent)
+            .setAutoCancel(true)
+            .setCategory(Notification.CATEGORY_EMAIL)
+            .setPriority(Notification.PRIORITY_HIGH)
+            .setShowWhen(true)
+            .setWhen(System.currentTimeMillis())
+            .setGroup("$MAIL_CHANNEL_PREFIX$accountId")
+
+        if (!playSound && !enableVibration) {
+            notificationBuilder
+                .setDefaults(0)
+                .setSound(null)
+                .setVibrate(null)
+                .setGroupAlertBehavior(Notification.GROUP_ALERT_SUMMARY)
+        }
+
+        val notification = notificationBuilder
+            .build()
+
+        manager.notify(("mail:$accountId:$messageId").hashCode(), notification)
+    }
+
+    private fun ensureAccountMailChannel(
+        manager: NotificationManager,
+        accountId: String,
+        accountName: String,
+    ): String {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return FALLBACK_CHANNEL_ID
+
+        val groupId = "$ACCOUNT_GROUP_PREFIX$accountId"
+        val channelId = "$MAIL_CHANNEL_PREFIX$accountId"
+        manager.createNotificationChannelGroup(NotificationChannelGroup(groupId, accountName))
+
+        val channel = NotificationChannel(
+            channelId,
+            "邮件",
+            NotificationManager.IMPORTANCE_HIGH,
+        )
+        channel.group = groupId
+        manager.createNotificationChannel(channel)
+        return channelId
     }
 
     private fun captureVisibleWebViewRect(

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:material_symbols_icons/symbols.dart';
 
 import '../../app/providers.dart';
 import '../../domain/enums/account_enums.dart';
@@ -33,9 +34,7 @@ class _SyncConfigPageState extends ConsumerState<SyncConfigPage> {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('同步设置'),
-      ),
+      appBar: AppBar(title: const Text('同步设置')),
       body: _isSyncing ? _buildSyncingView(theme) : _buildConfigView(theme),
     );
   }
@@ -45,10 +44,7 @@ class _SyncConfigPageState extends ConsumerState<SyncConfigPage> {
       padding: const EdgeInsets.all(24.0),
       children: [
         // 标题
-        Text(
-          '首次同步',
-          style: theme.textTheme.headlineMedium,
-        ),
+        Text('首次同步', style: theme.textTheme.headlineMedium),
         const SizedBox(height: 8),
         Text(
           '选择要下载的邮件数量',
@@ -68,10 +64,7 @@ class _SyncConfigPageState extends ConsumerState<SyncConfigPage> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(
-                      '下载邮件数量',
-                      style: theme.textTheme.titleMedium,
-                    ),
+                    Text('下载邮件数量', style: theme.textTheme.titleMedium),
                     Text(
                       '$_messageCount 封',
                       style: theme.textTheme.titleLarge?.copyWith(
@@ -150,7 +143,7 @@ class _SyncConfigPageState extends ConsumerState<SyncConfigPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Icon(
-                Icons.info_outline,
+                Symbols.info,
                 size: 20,
                 color: theme.colorScheme.onSurfaceVariant,
               ),
@@ -172,10 +165,7 @@ class _SyncConfigPageState extends ConsumerState<SyncConfigPage> {
         const SizedBox(height: 32),
 
         // 开始同步按钮
-        FilledButton(
-          onPressed: _startSync,
-          child: const Text('开始同步'),
-        ),
+        FilledButton(onPressed: _startSync, child: const Text('开始同步')),
 
         const SizedBox(height: 12),
 
@@ -206,10 +196,7 @@ class _SyncConfigPageState extends ConsumerState<SyncConfigPage> {
               ),
             ),
             const SizedBox(height: 32),
-            Text(
-              '正在同步邮件',
-              style: theme.textTheme.headlineSmall,
-            ),
+            Text('正在同步邮件', style: theme.textTheme.headlineSmall),
             const SizedBox(height: 8),
             Text(
               '${(_syncProgress * 100).toInt()}%',
@@ -335,9 +322,9 @@ class _SyncConfigPageState extends ConsumerState<SyncConfigPage> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('同步失败: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('同步失败: $e')));
         setState(() {
           _isSyncing = false;
         });

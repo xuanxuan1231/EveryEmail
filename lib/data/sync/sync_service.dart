@@ -8,6 +8,7 @@ import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../../core/platform/local_mail_notifications.dart';
 import '../../core/utils/id_generator.dart' as id_gen;
 import '../../domain/enums/account_enums.dart';
 import '../../domain/enums/message_enums.dart';
@@ -155,6 +156,19 @@ class SyncService {
       backend.reconnect,
       highPriority: true,
     );
+  }
+
+  /// 丢弃某账户当前缓存的后端连接。账户配置在设置页被修改后调用，确保后续同步
+  /// 重新从数据库读取配置并建立连接。
+  Future<void> invalidateBackend(String accountId) async {
+    final backend = _backends[accountId];
+    _tokenCache.remove(accountId);
+    if (backend == null) return;
+
+    await _runOnAccount<void>(accountId, () async {
+      final current = _backends.remove(accountId);
+      await (current ?? backend).disconnect();
+    }, highPriority: true);
   }
 
   /// 从 [accountId] 重建领域模型 [AccountConfig]（[_getBackend] 需要它）。
@@ -319,15 +333,20 @@ class SyncService {
 
     // 获取同步游标
     final syncState = await _db.messageDao.getSyncState(folder.id);
-    final token = syncState?.deltaLink != null
-        ? SyncToken(syncState!.deltaLink!)
-        : null;
+    final hadSyncToken = syncState?.deltaLink != null;
+    final token = hadSyncToken ? SyncToken(syncState!.deltaLink!) : null;
 
     // 执行增量同步
     final result = await backend.syncDelta(folder.toMailboxFolder(), token);
 
     // 持久化新增/更新的邮件
-    await _persistMessages(result.added, folder);
+    final newMessages = await _persistMessages(result.added, folder);
+    await _notifyNewMessages(
+      account,
+      folder,
+      newMessages,
+      hadSyncToken: hadSyncToken,
+    );
 
     // 应用入站标志变更（仅 flags，不覆盖其它列）。
     await _applyFlagUpdates(result.updated, folder, account);
@@ -471,11 +490,12 @@ class SyncService {
   static const int _backfillPageSize = 50;
 
   /// 持久化邮件列表到数据库。
-  Future<void> _persistMessages(
+  Future<List<_PersistedMessage>> _persistMessages(
     List<MessageEnvelope> envelopes,
     Folder folder,
   ) async {
     final companions = <MessagesCompanion>[];
+    final newMessages = <_PersistedMessage>[];
 
     for (final envelope in envelopes) {
       // 查找是否已存在
@@ -499,6 +519,11 @@ class SyncService {
 
       final messageId = existing?.id ?? id_gen.generateId();
       final ref = envelope.ref;
+      if (existing == null) {
+        newMessages.add(
+          _PersistedMessage(messageId: messageId, envelope: envelope),
+        );
+      }
 
       companions.add(
         MessagesCompanion(
@@ -533,6 +558,44 @@ class SyncService {
 
     if (companions.isNotEmpty) {
       await _db.messageDao.upsertMessages(companions);
+    }
+    return newMessages;
+  }
+
+  Future<void> _notifyNewMessages(
+    AccountConfig account,
+    Folder folder,
+    List<_PersistedMessage> messages, {
+    required bool hadSyncToken,
+  }) async {
+    if (!hadSyncToken || messages.isEmpty) return;
+    if (account.type != AccountType.genericImap) return;
+    if (!folder.notificationsEnabled) return;
+    if (folder.folderType == FolderType.sent ||
+        folder.folderType == FolderType.drafts ||
+        folder.folderType == FolderType.trash) {
+      return;
+    }
+
+    final settings = await AccountSettingsStore.read(account.id);
+    if (!settings.notificationsEnabled) return;
+
+    for (final persisted in messages) {
+      final envelope = persisted.envelope;
+      if (envelope.flags.contains(MessageFlag.seen)) continue;
+      await LocalMailNotifications.showNewMail(
+        accountId: account.id,
+        accountName: account.displayName.trim().isEmpty
+            ? account.email
+            : account.displayName,
+        messageId: persisted.messageId,
+        subject: envelope.subject.trim().isEmpty ? '新邮件' : envelope.subject,
+        senderName: envelope.from?.name,
+        senderEmail: envelope.from?.email,
+        preview: envelope.preview,
+        playSound: settings.notificationSound,
+        enableVibration: settings.notificationVibration,
+      );
     }
   }
 
@@ -1365,6 +1428,13 @@ class SyncService {
 
     onProgress?.call(1.0);
   }
+}
+
+class _PersistedMessage {
+  const _PersistedMessage({required this.messageId, required this.envelope});
+
+  final String messageId;
+  final MessageEnvelope envelope;
 }
 
 /// Folder 扩展：转换为 MailboxFolder。

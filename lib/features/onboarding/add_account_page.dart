@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:material_symbols_icons/symbols.dart';
 
 import '../../app/providers.dart';
 import '../../core/config/app_config.dart';
@@ -172,7 +173,7 @@ class _AddAccountPageState extends ConsumerState<AddAccountPage> {
               decoration: const InputDecoration(
                 labelText: '邮箱地址',
                 hintText: 'example@gmail.com',
-                prefixIcon: Icon(Icons.email_outlined),
+                prefixIcon: Icon(Symbols.email),
                 border: OutlineInputBorder(),
               ),
               validator: (value) {
@@ -200,7 +201,7 @@ class _AddAccountPageState extends ConsumerState<AddAccountPage> {
                 ),
                 child: Row(
                   children: [
-                    Icon(Icons.error_outline, color: theme.colorScheme.error),
+                    Icon(Symbols.error_outline, color: theme.colorScheme.error),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(

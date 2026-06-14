@@ -110,6 +110,45 @@ void main() {
     expect(account.colorValue, 0xFF1A73E8);
   });
 
+  test('账户服务器配置可更新', () async {
+    await db.accountDao.upsertAccount(
+      AccountsCompanion.insert(
+        id: 'acc-1',
+        email: 'me@example.com',
+        displayName: '我',
+        accountType: AccountType.genericImap,
+        authType: AuthType.password,
+        loginName: const Value('me@example.com'),
+        imapHost: const Value('imap.old.example.com'),
+        imapPort: const Value(993),
+        imapSocketType: const Value(SocketType.ssl),
+        smtpHost: const Value('smtp.old.example.com'),
+        smtpPort: const Value(465),
+        smtpSocketType: const Value(SocketType.ssl),
+      ),
+    );
+
+    await db.accountDao.updateServerConfig(
+      'acc-1',
+      loginName: const Value('mailbox'),
+      imapHost: const Value('imap.new.example.com'),
+      imapPort: const Value(143),
+      imapSocketType: const Value(SocketType.starttls),
+      smtpHost: const Value('smtp.new.example.com'),
+      smtpPort: const Value(587),
+      smtpSocketType: const Value(SocketType.starttls),
+    );
+
+    final account = await db.accountDao.getAccount('acc-1');
+    expect(account!.loginName, 'mailbox');
+    expect(account.imapHost, 'imap.new.example.com');
+    expect(account.imapPort, 143);
+    expect(account.imapSocketType, SocketType.starttls);
+    expect(account.smtpHost, 'smtp.new.example.com');
+    expect(account.smtpPort, 587);
+    expect(account.smtpSocketType, SocketType.starttls);
+  });
+
   test('文件夹级联删除：删账户应清空其文件夹', () async {
     await db.accountDao.upsertAccount(
       AccountsCompanion.insert(

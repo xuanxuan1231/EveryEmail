@@ -4,6 +4,7 @@ import 'package:drift/drift.dart' show Value;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:material_symbols_icons/symbols.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../app/providers.dart';
@@ -14,8 +15,10 @@ import '../../data/local/database/app_database.dart';
 import '../../data/settings/account_settings.dart';
 import '../../data/settings/app_font_settings.dart';
 import '../../data/settings/display_settings.dart';
+import '../../data/settings/imap_realtime_settings.dart';
 import '../../domain/enums/account_enums.dart';
 import '../../domain/enums/message_enums.dart';
+import '../../domain/models/account_config.dart';
 import '../../domain/models/unified_mailbox.dart';
 import 'widgets/account_profile_editors.dart';
 
@@ -115,7 +118,7 @@ class SettingsPage extends ConsumerWidget {
                         returnId: _displaySettingsReturnId,
                         isFirst: true,
                         isLast: false,
-                        icon: Icons.dark_mode_outlined,
+                        icon: Symbols.dark_mode,
                         iconColor: colors.primary,
                         title: '显示',
                         subtitle: '颜色、字体、邮件列表',
@@ -126,7 +129,7 @@ class SettingsPage extends ConsumerWidget {
                         returnId: _notificationSettingsReturnId,
                         isFirst: false,
                         isLast: false,
-                        icon: Icons.notifications_outlined,
+                        icon: Symbols.notifications,
                         iconColor: colors.tertiary,
                         title: '通知',
                         subtitle: '系统通知设置',
@@ -137,14 +140,14 @@ class SettingsPage extends ConsumerWidget {
                         returnId: _securitySettingsReturnId,
                         isFirst: false,
                         isLast: false,
-                        icon: Icons.shield_outlined,
+                        icon: Symbols.shield,
                         iconColor: colors.primary,
                         title: '安全',
                         subtitle: '远程图片加载与信任名单',
                         onTap: () => context.push('/settings/security'),
                       ),
                       _SettingsTile(
-                        icon: Icons.cloud_sync_outlined,
+                        icon: Symbols.cloud_sync,
                         iconColor: colors.secondary,
                         title: '网络',
                         subtitle: '连接与同步',
@@ -187,7 +190,7 @@ class SettingsPage extends ConsumerWidget {
                         returnId: _aboutReturnId,
                         isFirst: true,
                         isLast: true,
-                        icon: Icons.info_outline_rounded,
+                        icon: Symbols.info_rounded,
                         iconColor: colors.primary,
                         title: '关于',
                         subtitle: 'EveryEmail',
@@ -277,7 +280,7 @@ class SettingsPage extends ConsumerWidget {
                         title: choices[index].title,
                         subtitle: choices[index].subtitle,
                         trailing: choices[index].value == selected
-                            ? Icon(Icons.check_rounded, color: colors.primary)
+                            ? Icon(Symbols.check_rounded, color: colors.primary)
                             : null,
                         onTap: () {
                           Navigator.of(context).pop();
@@ -395,7 +398,7 @@ class DisplaySettingsPage extends ConsumerWidget {
                     title: '外观',
                     children: [
                       _SettingsTile(
-                        icon: Icons.brightness_auto,
+                        icon: Symbols.brightness_auto,
                         iconColor: colors.primary,
                         title: '颜色模式',
                         subtitle: '自动、浅色或深色',
@@ -410,19 +413,19 @@ class DisplaySettingsPage extends ConsumerWidget {
                             choices: const [
                               _SettingsChoice(
                                 value: AppColorMode.system,
-                                icon: Icons.brightness_auto,
+                                icon: Symbols.brightness_auto,
                                 title: '自动',
                                 subtitle: '跟随系统浅色或深色模式',
                               ),
                               _SettingsChoice(
                                 value: AppColorMode.light,
-                                icon: Icons.light_mode_outlined,
+                                icon: Symbols.light_mode,
                                 title: '浅色',
                                 subtitle: '始终使用浅色界面',
                               ),
                               _SettingsChoice(
                                 value: AppColorMode.dark,
-                                icon: Icons.dark_mode_outlined,
+                                icon: Symbols.dark_mode,
                                 title: '深色',
                                 subtitle: '始终使用深色界面',
                               ),
@@ -438,7 +441,7 @@ class DisplaySettingsPage extends ConsumerWidget {
                         },
                       ),
                       _SettingsTile(
-                        icon: Icons.text_fields_rounded,
+                        icon: Symbols.text_fields_rounded,
                         iconColor: colors.primary,
                         title: '字体',
                         subtitle: SettingsPage._fontDescription(appFont),
@@ -471,7 +474,7 @@ class DisplaySettingsPage extends ConsumerWidget {
                     title: '邮件列表',
                     children: [
                       _SettingsTile(
-                        icon: Icons.notes_outlined,
+                        icon: Symbols.notes,
                         iconColor: colors.secondary,
                         title: '预览行数',
                         subtitle: '控制列表中正文摘要占用的行数',
@@ -486,25 +489,25 @@ class DisplaySettingsPage extends ConsumerWidget {
                             choices: const [
                               _SettingsChoice(
                                 value: 0,
-                                icon: Icons.subject_rounded,
+                                icon: Symbols.subject_rounded,
                                 title: '不显示',
                                 subtitle: '隐藏正文摘要，让列表更紧凑',
                               ),
                               _SettingsChoice(
                                 value: 1,
-                                icon: Icons.short_text_rounded,
+                                icon: Symbols.short_text_rounded,
                                 title: '1 行',
                                 subtitle: '显示一行正文摘要',
                               ),
                               _SettingsChoice(
                                 value: 2,
-                                icon: Icons.notes_outlined,
+                                icon: Symbols.notes,
                                 title: '2 行',
                                 subtitle: '显示两行正文摘要',
                               ),
                               _SettingsChoice(
                                 value: 3,
-                                icon: Icons.article_outlined,
+                                icon: Symbols.article,
                                 title: '3 行',
                                 subtitle: '显示更多正文摘要',
                               ),
@@ -520,7 +523,7 @@ class DisplaySettingsPage extends ConsumerWidget {
                         },
                       ),
                       _SettingsTile(
-                        icon: Icons.schedule_rounded,
+                        icon: Symbols.schedule_rounded,
                         iconColor: colors.secondary,
                         title: '时间格式',
                         subtitle: '控制邮件列表右侧时间显示',
@@ -535,19 +538,19 @@ class DisplaySettingsPage extends ConsumerWidget {
                             choices: const [
                               _SettingsChoice(
                                 value: MailListTimeFormat.smart,
-                                icon: Icons.schedule_rounded,
+                                icon: Symbols.schedule_rounded,
                                 title: '智能',
                                 subtitle: '今天显示时间，近期显示昨天或星期',
                               ),
                               _SettingsChoice(
                                 value: MailListTimeFormat.twentyFourHour,
-                                icon: Icons.access_time_rounded,
+                                icon: Symbols.access_time_rounded,
                                 title: '24 小时',
                                 subtitle: '今天显示 HH:mm，昨天显示昨天 HH:mm',
                               ),
                               _SettingsChoice(
                                 value: MailListTimeFormat.dateOnly,
-                                icon: Icons.calendar_today_outlined,
+                                icon: Symbols.calendar_today,
                                 title: '仅日期',
                                 subtitle: '列表中优先显示日期',
                               ),
@@ -569,7 +572,7 @@ class DisplaySettingsPage extends ConsumerWidget {
                     title: '可见性',
                     children: [
                       _SettingsTile(
-                        icon: Icons.account_circle_outlined,
+                        icon: Symbols.account_circle,
                         iconColor: colors.tertiary,
                         title: '发件人头像',
                         subtitle: '在邮件列表左侧显示发件人首字母头像',
@@ -594,7 +597,7 @@ class DisplaySettingsPage extends ConsumerWidget {
                         },
                       ),
                       _SettingsTile(
-                        icon: Icons.label_outline_rounded,
+                        icon: Symbols.label_outline_rounded,
                         iconColor: colors.tertiary,
                         title: '账户标签',
                         subtitle: '在统一收件箱和搜索结果中显示账户来源',
@@ -619,7 +622,7 @@ class DisplaySettingsPage extends ConsumerWidget {
                         },
                       ),
                       _SettingsTile(
-                        icon: Icons.attach_file,
+                        icon: Symbols.attach_file,
                         iconColor: colors.tertiary,
                         title: '附件图标',
                         subtitle: '有附件的邮件在主题行显示回形针',
@@ -644,7 +647,7 @@ class DisplaySettingsPage extends ConsumerWidget {
                         },
                       ),
                       _SettingsTile(
-                        icon: Icons.mark_email_unread_outlined,
+                        icon: Symbols.mark_email_unread,
                         iconColor: colors.tertiary,
                         title: '未读强调条',
                         subtitle: '未读邮件左侧显示强调色竖条',
@@ -669,7 +672,7 @@ class DisplaySettingsPage extends ConsumerWidget {
                         },
                       ),
                       _SettingsTile(
-                        icon: Icons.star_border_rounded,
+                        icon: Symbols.star_border_rounded,
                         iconColor: colors.tertiary,
                         title: '星标按钮',
                         subtitle: '在邮件列表右侧显示星标按钮',
@@ -694,7 +697,7 @@ class DisplaySettingsPage extends ConsumerWidget {
                         },
                       ),
                       _SettingsTile(
-                        icon: Icons.forum_outlined,
+                        icon: Symbols.forum,
                         iconColor: colors.tertiary,
                         title: '会话视图',
                         subtitle: '把同一往来的邮件归为一条会话，点开按时间展开',
@@ -725,7 +728,7 @@ class DisplaySettingsPage extends ConsumerWidget {
                     title: '性能',
                     children: [
                       _SettingsTile(
-                        icon: Icons.bolt_outlined,
+                        icon: Symbols.bolt,
                         iconColor: colors.tertiary,
                         title: '自动预取正文',
                         subtitle: '后台提前下载邮件正文，点开即见内容（仅 Wi‑Fi/非计费网络）',
@@ -795,7 +798,7 @@ class SecuritySettingsPage extends ConsumerWidget {
                         returnId: _remoteImagesReturnId,
                         isFirst: true,
                         isLast: true,
-                        icon: Icons.image_outlined,
+                        icon: Symbols.image,
                         iconColor: colors.primary,
                         title: '邮件中的图片',
                         subtitle: '远程图片自动加载与信任名单',
@@ -857,7 +860,7 @@ class RemoteImageSettingsPage extends ConsumerWidget {
                     title: '自动加载',
                     children: [
                       _SettingsTile(
-                        icon: Icons.verified_outlined,
+                        icon: Symbols.verified,
                         iconColor: colors.primary,
                         title: '预置信任名单',
                         subtitle: '知名服务商官方域名的通知邮件自动显示图片',
@@ -896,14 +899,18 @@ class RemoteImageSettingsPage extends ConsumerWidget {
                           )
                         : Column(
                             children: [
-                              for (var i = 0; i < trustedSenders.length; i++) ...[
+                              for (
+                                var i = 0;
+                                i < trustedSenders.length;
+                                i++
+                              ) ...[
                                 if (i > 0) const _SectionDivider(),
                                 _SettingsTile(
-                                  icon: Icons.person_outline,
+                                  icon: Symbols.person_outline,
                                   iconColor: colors.tertiary,
                                   title: trustedSenders[i],
                                   trailing: IconButton(
-                                    icon: const Icon(Icons.delete_outline),
+                                    icon: const Icon(Symbols.delete_outline),
                                     tooltip: '移除',
                                     onPressed: () {
                                       unawaited(
@@ -960,7 +967,7 @@ class NotificationSettingsPage extends ConsumerWidget {
                     title: '通知',
                     children: [
                       _SettingsTile(
-                        icon: Icons.open_in_new_rounded,
+                        icon: Symbols.open_in_new_rounded,
                         iconColor: colors.tertiary,
                         title: '系统通知设置',
                         subtitle: '按账户开关、提示音与震动由系统管理',
@@ -1030,7 +1037,7 @@ class AboutPage extends ConsumerWidget {
                     title: '应用',
                     children: [
                       _SettingsTile(
-                        icon: Icons.verified_outlined,
+                        icon: Symbols.verified,
                         iconColor: colors.primary,
                         title: '版本',
                         subtitle: '当前安装的应用版本',
@@ -1041,7 +1048,7 @@ class AboutPage extends ConsumerWidget {
                         returnId: _aboutLicensesReturnId,
                         isFirst: false,
                         isLast: true,
-                        icon: Icons.description_outlined,
+                        icon: Symbols.description,
                         iconColor: colors.secondary,
                         title: '开源许可',
                         subtitle: '查看第三方库与许可证',
@@ -1054,21 +1061,21 @@ class AboutPage extends ConsumerWidget {
                     title: '技术',
                     children: [
                       _SettingsTile(
-                        icon: Icons.bolt_outlined,
+                        icon: Symbols.bolt,
                         iconColor: colors.tertiary,
                         title: '实时同步',
                         subtitle: 'IMAP IDLE 与 Microsoft Graph 推送',
                         enabled: false,
                       ),
                       _SettingsTile(
-                        icon: Icons.palette_outlined,
+                        icon: Symbols.palette,
                         iconColor: colors.tertiary,
                         title: '设计语言',
                         subtitle: 'Material 3 Expressive',
                         enabled: false,
                       ),
                       _SettingsTile(
-                        icon: Icons.flutter_dash,
+                        icon: Symbols.flutter_dash,
                         iconColor: colors.tertiary,
                         title: '构建框架',
                         subtitle: 'Flutter',
@@ -1083,7 +1090,7 @@ class AboutPage extends ConsumerWidget {
                       children: [
                         if (_aboutProjectUrl.isNotEmpty)
                           _SettingsTile(
-                            icon: Icons.code_rounded,
+                            icon: Symbols.code_rounded,
                             iconColor: colors.primary,
                             title: '项目主页',
                             subtitle: _aboutProjectUrl,
@@ -1091,7 +1098,7 @@ class AboutPage extends ConsumerWidget {
                           ),
                         if (_aboutFeedbackEmail.isNotEmpty)
                           _SettingsTile(
-                            icon: Icons.feedback_outlined,
+                            icon: Symbols.feedback,
                             iconColor: colors.primary,
                             title: '反馈与建议',
                             subtitle: _aboutFeedbackEmail,
@@ -1169,7 +1176,7 @@ class _AboutHeader extends StatelessWidget {
             borderRadius: BorderRadius.circular(24),
           ),
           child: Icon(
-            Icons.mark_email_unread_rounded,
+            Symbols.mark_email_unread_rounded,
             size: 44,
             color: colors.primary,
           ),
@@ -1229,7 +1236,7 @@ class AppLicensePage extends ConsumerWidget {
         applicationIcon: Padding(
           padding: const EdgeInsets.all(8),
           child: Icon(
-            Icons.mark_email_unread_rounded,
+            Symbols.mark_email_unread_rounded,
             size: 48,
             color: context.colors.primary,
           ),
@@ -1273,6 +1280,9 @@ class AccountSettingsPage extends ConsumerWidget {
         }
 
         final settings = ref.watch(accountSettingsProvider(account.id));
+        final imapRealtime = account.accountType == AccountType.genericImap
+            ? ref.watch(imapRealtimeSettingsProvider(account.id))
+            : ImapRealtimeConfig.defaults;
 
         return Scaffold(
           backgroundColor: colors.surface,
@@ -1294,7 +1304,7 @@ class AccountSettingsPage extends ConsumerWidget {
                         title: '资料',
                         children: [
                           _SettingsTile(
-                            icon: Icons.account_circle_outlined,
+                            icon: Symbols.account_circle,
                             iconColor: colors.primary,
                             title: '头像',
                             subtitle: _avatarSummary(settings),
@@ -1313,14 +1323,14 @@ class AccountSettingsPage extends ConsumerWidget {
                             ),
                           ),
                           _SettingsTile(
-                            icon: Icons.badge_outlined,
+                            icon: Symbols.badge,
                             iconColor: colors.primary,
                             title: '名称',
                             subtitle: account.displayName,
                             onTap: () => _showNameEditor(context, ref, account),
                           ),
                           _SettingsTile(
-                            icon: Icons.palette_outlined,
+                            icon: Symbols.palette,
                             iconColor: _accountColor(context, account),
                             title: '颜色',
                             subtitle: '账户标签和头像颜色',
@@ -1338,7 +1348,7 @@ class AccountSettingsPage extends ConsumerWidget {
                         title: '邮件收发',
                         children: [
                           _SettingsTile(
-                            icon: Icons.cloud_download_outlined,
+                            icon: Symbols.cloud_download,
                             iconColor: colors.secondary,
                             title: '接收邮件',
                             subtitle: '同步此账户的新邮件和变更',
@@ -1371,7 +1381,7 @@ class AccountSettingsPage extends ConsumerWidget {
                             },
                           ),
                           _SettingsTile(
-                            icon: Icons.send_outlined,
+                            icon: Symbols.send,
                             iconColor: colors.secondary,
                             title: '发送邮件',
                             subtitle: '允许此账户用于发信',
@@ -1402,7 +1412,7 @@ class AccountSettingsPage extends ConsumerWidget {
                             },
                           ),
                           _SettingsTile(
-                            icon: Icons.sync_outlined,
+                            icon: Symbols.sync,
                             iconColor: colors.secondary,
                             title: '实时同步',
                             subtitle: '前台自动监听或响应推送触发',
@@ -1439,6 +1449,79 @@ class AccountSettingsPage extends ConsumerWidget {
                                   }
                                 : null,
                           ),
+                          if (account.accountType ==
+                              AccountType.genericImap) ...[
+                            _SettingsTile(
+                              icon: Symbols.bolt,
+                              iconColor: colors.secondary,
+                              title: '使用 IMAP IDLE',
+                              subtitle: '服务器支持时保持长连接；关闭后按间隔轮询',
+                              enabled:
+                                  settings.receiveEnabled &&
+                                  settings.realtimeSyncEnabled,
+                              trailing: Switch(
+                                value: imapRealtime.idleEnabled,
+                                onChanged:
+                                    settings.receiveEnabled &&
+                                        settings.realtimeSyncEnabled
+                                    ? (enabled) {
+                                        unawaited(
+                                          ref
+                                              .read(
+                                                imapRealtimeSettingsProvider(
+                                                  account.id,
+                                                ).notifier,
+                                              )
+                                              .setIdleEnabled(enabled),
+                                        );
+                                      }
+                                    : null,
+                              ),
+                              onTap:
+                                  settings.receiveEnabled &&
+                                      settings.realtimeSyncEnabled
+                                  ? () {
+                                      unawaited(
+                                        ref
+                                            .read(
+                                              imapRealtimeSettingsProvider(
+                                                account.id,
+                                              ).notifier,
+                                            )
+                                            .setIdleEnabled(
+                                              !imapRealtime.idleEnabled,
+                                            ),
+                                      );
+                                    }
+                                  : null,
+                            ),
+                            _SettingsTile(
+                              icon: Symbols.timer,
+                              iconColor: colors.secondary,
+                              title: '轮询间隔',
+                              subtitle: imapRealtime.idleEnabled
+                                  ? '关闭 IDLE 后按此频率检查新邮件'
+                                  : '按此频率检查新邮件',
+                              enabled:
+                                  settings.receiveEnabled &&
+                                  settings.realtimeSyncEnabled,
+                              trailingLabel: _pollingIntervalLabel(
+                                imapRealtime.pollingInterval,
+                              ),
+                              onTap:
+                                  settings.receiveEnabled &&
+                                      settings.realtimeSyncEnabled
+                                  ? () {
+                                      _showPollingIntervalSheet(
+                                        context,
+                                        ref,
+                                        account.id,
+                                        imapRealtime.pollingInterval,
+                                      );
+                                    }
+                                  : null,
+                            ),
+                          ],
                         ],
                       ),
                       const SizedBox(height: 20),
@@ -1450,7 +1533,7 @@ class AccountSettingsPage extends ConsumerWidget {
                             returnId: _accountFoldersReturnId(account.id),
                             isFirst: true,
                             isLast: false,
-                            icon: Icons.folder_open_outlined,
+                            icon: Symbols.folder_open,
                             iconColor: colors.tertiary,
                             title: '管理文件夹',
                             subtitle: '逐个控制显示、同步、通知与统一化',
@@ -1459,7 +1542,7 @@ class AccountSettingsPage extends ConsumerWidget {
                             ),
                           ),
                           _SettingsTile(
-                            icon: Icons.folder_copy_outlined,
+                            icon: Symbols.folder_copy,
                             iconColor: colors.tertiary,
                             title: '同步范围',
                             subtitle: '控制此账户拉取哪些文件夹',
@@ -1476,25 +1559,25 @@ class AccountSettingsPage extends ConsumerWidget {
                                 choices: const [
                                   _SettingsChoice(
                                     value: AccountFolderSyncScope.inboxOnly,
-                                    icon: Icons.inbox_outlined,
+                                    icon: Symbols.inbox,
                                     title: '仅收件箱',
                                     subtitle: '只同步收件箱邮件',
                                   ),
                                   _SettingsChoice(
                                     value: AccountFolderSyncScope.standard,
-                                    icon: Icons.folder_special_outlined,
+                                    icon: Symbols.folder_special,
                                     title: '标准文件夹',
                                     subtitle: '同步收件箱、已发送和草稿',
                                   ),
                                   _SettingsChoice(
                                     value: AccountFolderSyncScope.subscribed,
-                                    icon: Icons.fact_check_outlined,
+                                    icon: Symbols.fact_check,
                                     title: '已订阅',
                                     subtitle: '同步服务器标记为已订阅的文件夹',
                                   ),
                                   _SettingsChoice(
                                     value: AccountFolderSyncScope.all,
-                                    icon: Icons.all_inbox_outlined,
+                                    icon: Symbols.all_inbox,
                                     title: '全部',
                                     subtitle: '同步此账户的全部文件夹',
                                   ),
@@ -1514,7 +1597,7 @@ class AccountSettingsPage extends ConsumerWidget {
                             },
                           ),
                           _SettingsTile(
-                            icon: Icons.report_gmailerrorred_outlined,
+                            icon: Symbols.report_gmailerrorred,
                             iconColor: colors.tertiary,
                             title: '垃圾箱和废纸篓',
                             subtitle: '允许同步垃圾邮件和已删除邮件文件夹',
@@ -1553,7 +1636,7 @@ class AccountSettingsPage extends ConsumerWidget {
                         title: '搜索',
                         children: [
                           _SettingsTile(
-                            icon: Icons.search_outlined,
+                            icon: Symbols.search,
                             iconColor: colors.secondary,
                             title: '纳入搜索',
                             subtitle: '全局搜索包含此账户邮件',
@@ -1586,7 +1669,7 @@ class AccountSettingsPage extends ConsumerWidget {
                             },
                           ),
                           _SettingsTile(
-                            icon: Icons.manage_search_outlined,
+                            icon: Symbols.manage_search,
                             iconColor: colors.secondary,
                             title: '搜索垃圾箱和废纸篓',
                             subtitle: '全局搜索包含此账户的垃圾邮件和已删除邮件',
@@ -1629,15 +1712,27 @@ class AccountSettingsPage extends ConsumerWidget {
                       _SettingsSection(
                         title: '账户',
                         children: [
+                          if (account.accountType == AccountType.genericImap)
+                            _SettingsTile(
+                              icon: Symbols.tune,
+                              iconColor: colors.tertiary,
+                              title: '服务器配置',
+                              subtitle: _serverConfigSummary(account),
+                              onTap: () => _showServerConfigEditor(
+                                context,
+                                ref,
+                                account,
+                              ),
+                            ),
                           _SettingsTile(
-                            icon: Icons.alternate_email_rounded,
+                            icon: Symbols.alternate_email_rounded,
                             iconColor: colors.tertiary,
                             title: '邮箱地址',
                             subtitle: account.email,
                             enabled: false,
                           ),
                           _SettingsTile(
-                            icon: Icons.dns_outlined,
+                            icon: Symbols.dns,
                             iconColor: colors.tertiary,
                             title: '类型',
                             subtitle:
@@ -1645,7 +1740,7 @@ class AccountSettingsPage extends ConsumerWidget {
                             enabled: false,
                           ),
                           _SettingsTile(
-                            icon: Icons.delete_outline_rounded,
+                            icon: Symbols.delete_outline_rounded,
                             iconColor: colors.error,
                             titleColor: colors.error,
                             title: '删除账户',
@@ -1676,6 +1771,118 @@ class AccountSettingsPage extends ConsumerWidget {
       if (account.id == accountId) return account;
     }
     return null;
+  }
+
+  static String _pollingIntervalLabel(Duration interval) {
+    if (interval.inSeconds < 60) return '${interval.inSeconds} 秒';
+    return '${interval.inMinutes} 分钟';
+  }
+
+  static void _showPollingIntervalSheet(
+    BuildContext context,
+    WidgetRef ref,
+    String accountId,
+    Duration selected,
+  ) {
+    SettingsPage._showChoiceSheet<Duration>(
+      context: context,
+      title: '轮询间隔',
+      selected: selected,
+      choices: const [
+        _SettingsChoice(
+          value: Duration(seconds: 30),
+          icon: Symbols.speed,
+          title: '30 秒',
+          subtitle: '最快检查频率，耗电更多',
+        ),
+        _SettingsChoice(
+          value: Duration(minutes: 1),
+          icon: Symbols.timer,
+          title: '1 分钟',
+          subtitle: '较快收到新邮件',
+        ),
+        _SettingsChoice(
+          value: Duration(minutes: 2),
+          icon: Symbols.timer,
+          title: '2 分钟',
+          subtitle: '延迟和耗电较均衡',
+        ),
+        _SettingsChoice(
+          value: Duration(minutes: 5),
+          icon: Symbols.schedule,
+          title: '5 分钟',
+          subtitle: '更省电，通知会稍慢',
+        ),
+        _SettingsChoice(
+          value: Duration(minutes: 10),
+          icon: Symbols.schedule,
+          title: '10 分钟',
+          subtitle: '适合低频账户',
+        ),
+        _SettingsChoice(
+          value: Duration(minutes: 15),
+          icon: Symbols.battery_saver,
+          title: '15 分钟',
+          subtitle: '最省电，实时性最低',
+        ),
+      ],
+      onSelected: (interval) {
+        unawaited(
+          ref
+              .read(imapRealtimeSettingsProvider(accountId).notifier)
+              .setPollingInterval(interval),
+        );
+      },
+    );
+  }
+
+  static String _serverConfigSummary(Account account) {
+    final imapHost = account.imapHost?.trim();
+    final smtpHost = account.smtpHost?.trim();
+    final parts = <String>[
+      if (imapHost != null && imapHost.isNotEmpty)
+        'IMAP $imapHost:${account.imapPort ?? 993}',
+      if (smtpHost != null && smtpHost.isNotEmpty)
+        'SMTP $smtpHost:${account.smtpPort ?? 465}',
+    ];
+    return parts.isEmpty ? '未配置服务器' : parts.join(' · ');
+  }
+
+  static Future<void> _showServerConfigEditor(
+    BuildContext context,
+    WidgetRef ref,
+    Account account,
+  ) async {
+    final saved = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      useSafeArea: true,
+      isScrollControlled: true,
+      builder: (context) => _AccountServerConfigEditorSheet(
+        account: account,
+        onSave:
+            ({
+              required String loginName,
+              required ServerConfig imap,
+              required ServerConfig smtp,
+            }) async {
+              await ref
+                  .read(accountRepositoryProvider)
+                  .updateServerConfig(
+                    account.id,
+                    loginName: loginName,
+                    imap: imap,
+                    smtp: smtp,
+                  );
+              await ref.read(syncServiceProvider).invalidateBackend(account.id);
+            },
+      ),
+    );
+
+    if (saved != true || !context.mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('服务器配置已保存')));
   }
 
   static Future<void> _confirmDeleteAccount(
@@ -1888,7 +2095,7 @@ class AccountFoldersPage extends ConsumerWidget {
                   title: '文件夹',
                   children: [
                     _SettingsTile(
-                      icon: Icons.error_outline_rounded,
+                      icon: Symbols.error_outline_rounded,
                       iconColor: colors.error,
                       title: '文件夹加载失败',
                       subtitle: '$error',
@@ -1902,7 +2109,7 @@ class AccountFoldersPage extends ConsumerWidget {
                       title: '文件夹',
                       children: [
                         _SettingsTile(
-                          icon: Icons.folder_off_outlined,
+                          icon: Symbols.folder_off,
                           iconColor: colors.onSurfaceVariant,
                           title: '暂无文件夹',
                           subtitle: '同步账户后这里会列出全部文件夹',
@@ -2039,7 +2246,7 @@ class _FolderSettingsSheetState extends ConsumerState<_FolderSettingsSheet> {
             child: Column(
               children: [
                 _SettingsTile(
-                  icon: Icons.visibility_outlined,
+                  icon: Symbols.visibility,
                   iconColor: colors.tertiary,
                   title: '显示文件夹',
                   subtitle: '在侧边栏文件夹列表中显示',
@@ -2048,7 +2255,7 @@ class _FolderSettingsSheetState extends ConsumerState<_FolderSettingsSheet> {
                 ),
                 const _SectionDivider(),
                 _SettingsTile(
-                  icon: Icons.sync_outlined,
+                  icon: Symbols.sync,
                   iconColor: colors.secondary,
                   title: '启用同步',
                   subtitle: '拉取此文件夹的新邮件和变更',
@@ -2060,7 +2267,7 @@ class _FolderSettingsSheetState extends ConsumerState<_FolderSettingsSheet> {
                 ),
                 const _SectionDivider(),
                 _SettingsTile(
-                  icon: Icons.all_inbox_outlined,
+                  icon: Symbols.all_inbox,
                   iconColor: colors.tertiary,
                   title: '统一化',
                   subtitle: canUnify ? '纳入统一账户的聚合视图' : '仅收件箱、已发送、草稿支持统一化',
@@ -2128,13 +2335,13 @@ String _folderFlagsSummary(Folder folder) {
 
 IconData _folderTypeIcon(FolderType type) {
   return switch (type) {
-    FolderType.inbox => Icons.inbox_outlined,
-    FolderType.sent => Icons.send_outlined,
-    FolderType.drafts => Icons.drafts_outlined,
-    FolderType.trash => Icons.delete_outline_rounded,
-    FolderType.spam => Icons.report_gmailerrorred_outlined,
-    FolderType.archive => Icons.archive_outlined,
-    FolderType.custom => Icons.folder_outlined,
+    FolderType.inbox => Symbols.inbox,
+    FolderType.sent => Symbols.send,
+    FolderType.drafts => Symbols.drafts,
+    FolderType.trash => Symbols.delete_outline_rounded,
+    FolderType.spam => Symbols.report_gmailerrorred,
+    FolderType.archive => Symbols.archive,
+    FolderType.custom => Symbols.folder,
   };
 }
 
@@ -2270,6 +2477,332 @@ class _AccountNameEditorSheetState extends State<_AccountNameEditorSheet>
   }
 }
 
+class _AccountServerConfigEditorSheet extends StatefulWidget {
+  const _AccountServerConfigEditorSheet({
+    required this.account,
+    required this.onSave,
+  });
+
+  final Account account;
+  final Future<void> Function({
+    required String loginName,
+    required ServerConfig imap,
+    required ServerConfig smtp,
+  })
+  onSave;
+
+  @override
+  State<_AccountServerConfigEditorSheet> createState() =>
+      _AccountServerConfigEditorSheetState();
+}
+
+class _AccountServerConfigEditorSheetState
+    extends State<_AccountServerConfigEditorSheet> {
+  final _formKey = GlobalKey<FormState>();
+
+  late final TextEditingController _loginNameController = TextEditingController(
+    text: widget.account.loginName?.trim().isNotEmpty == true
+        ? widget.account.loginName!.trim()
+        : widget.account.email,
+  );
+  late final TextEditingController _imapHostController = TextEditingController(
+    text: widget.account.imapHost ?? '',
+  );
+  late final TextEditingController _imapPortController = TextEditingController(
+    text: (widget.account.imapPort ?? 993).toString(),
+  );
+  late final TextEditingController _smtpHostController = TextEditingController(
+    text: widget.account.smtpHost ?? '',
+  );
+  late final TextEditingController _smtpPortController = TextEditingController(
+    text: (widget.account.smtpPort ?? 465).toString(),
+  );
+
+  late SocketType _imapSocketType =
+      widget.account.imapSocketType ?? SocketType.ssl;
+  late SocketType _smtpSocketType =
+      widget.account.smtpSocketType ?? SocketType.ssl;
+
+  bool _saving = false;
+  String? _errorMessage;
+
+  @override
+  void dispose() {
+    _loginNameController.dispose();
+    _imapHostController.dispose();
+    _imapPortController.dispose();
+    _smtpHostController.dispose();
+    _smtpPortController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final bottomPadding = MediaQuery.viewPaddingOf(context).bottom;
+    final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+
+    return AnimatedPadding(
+      duration: const Duration(milliseconds: 160),
+      curve: Curves.easeOutCubic,
+      padding: EdgeInsets.only(bottom: keyboardInset),
+      child: SingleChildScrollView(
+        padding: EdgeInsets.fromLTRB(20, 0, 20, bottomPadding + 24),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                '服务器配置',
+                style: theme.textTheme.headlineSmall?.copyWith(
+                  color: colors.onSurface,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0,
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _loginNameController,
+                enabled: !_saving,
+                textInputAction: TextInputAction.next,
+                decoration: const InputDecoration(
+                  labelText: '登录名',
+                  prefixIcon: Icon(Symbols.person_outline_rounded),
+                  border: OutlineInputBorder(),
+                ),
+                validator: _requiredValidator('请输入登录名'),
+              ),
+              const SizedBox(height: 20),
+              _buildServerGroup(
+                context,
+                title: 'IMAP',
+                hostController: _imapHostController,
+                portController: _imapPortController,
+                socketType: _imapSocketType,
+                onSocketTypeChanged: (type) {
+                  if (type == null) return;
+                  setState(() {
+                    _imapSocketType = type;
+                    _adjustPort(
+                      controller: _imapPortController,
+                      socketType: type,
+                      sslPort: 993,
+                      startTlsPort: 143,
+                    );
+                  });
+                },
+              ),
+              const SizedBox(height: 20),
+              _buildServerGroup(
+                context,
+                title: 'SMTP',
+                hostController: _smtpHostController,
+                portController: _smtpPortController,
+                socketType: _smtpSocketType,
+                onSocketTypeChanged: (type) {
+                  if (type == null) return;
+                  setState(() {
+                    _smtpSocketType = type;
+                    _adjustPort(
+                      controller: _smtpPortController,
+                      socketType: type,
+                      sslPort: 465,
+                      startTlsPort: 587,
+                    );
+                  });
+                },
+              ),
+              if (_errorMessage != null) ...[
+                const SizedBox(height: 16),
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: colors.errorContainer,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Text(
+                      _errorMessage!,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: colors.onErrorContainer,
+                        letterSpacing: 0,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 20),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: _saving
+                        ? null
+                        : () => Navigator.of(context).pop(),
+                    child: const Text('取消'),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    onPressed: _saving ? null : _save,
+                    child: _saving
+                        ? const SizedBox.square(
+                            dimension: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text('保存'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildServerGroup(
+    BuildContext context, {
+    required String title,
+    required TextEditingController hostController,
+    required TextEditingController portController,
+    required SocketType socketType,
+    required ValueChanged<SocketType?> onSocketTypeChanged,
+  }) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          title,
+          style: theme.textTheme.titleMedium?.copyWith(
+            color: colors.onSurface,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0,
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextFormField(
+          controller: hostController,
+          enabled: !_saving,
+          textInputAction: TextInputAction.next,
+          decoration: InputDecoration(
+            labelText: '$title 服务器',
+            prefixIcon: const Icon(Symbols.dns),
+            border: const OutlineInputBorder(),
+          ),
+          validator: _requiredValidator('请输入$title 服务器地址'),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: TextFormField(
+                controller: portController,
+                enabled: !_saving,
+                keyboardType: TextInputType.number,
+                textInputAction: TextInputAction.next,
+                decoration: const InputDecoration(
+                  labelText: '端口',
+                  border: OutlineInputBorder(),
+                ),
+                validator: _portValidator,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: DropdownButtonFormField<SocketType>(
+                initialValue: socketType,
+                decoration: const InputDecoration(
+                  labelText: '加密方式',
+                  border: OutlineInputBorder(),
+                ),
+                items: const [
+                  DropdownMenuItem(
+                    value: SocketType.ssl,
+                    child: Text('SSL/TLS'),
+                  ),
+                  DropdownMenuItem(
+                    value: SocketType.starttls,
+                    child: Text('STARTTLS'),
+                  ),
+                  DropdownMenuItem(value: SocketType.plain, child: Text('无')),
+                ],
+                onChanged: _saving ? null : onSocketTypeChanged,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  FormFieldValidator<String> _requiredValidator(String message) {
+    return (value) {
+      if (value == null || value.trim().isEmpty) return message;
+      return null;
+    };
+  }
+
+  String? _portValidator(String? value) {
+    final port = int.tryParse(value?.trim() ?? '');
+    if (port == null) return '请输入端口';
+    if (port < 1 || port > 65535) return '端口范围 1-65535';
+    return null;
+  }
+
+  void _adjustPort({
+    required TextEditingController controller,
+    required SocketType socketType,
+    required int sslPort,
+    required int startTlsPort,
+  }) {
+    final current = int.tryParse(controller.text.trim());
+    if (socketType == SocketType.ssl && current == startTlsPort) {
+      controller.text = sslPort.toString();
+    } else if (socketType == SocketType.starttls && current == sslPort) {
+      controller.text = startTlsPort.toString();
+    }
+  }
+
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    setState(() {
+      _saving = true;
+      _errorMessage = null;
+    });
+
+    try {
+      await widget.onSave(
+        loginName: _loginNameController.text.trim(),
+        imap: ServerConfig(
+          host: _imapHostController.text.trim(),
+          port: int.parse(_imapPortController.text.trim()),
+          socketType: _imapSocketType,
+        ),
+        smtp: ServerConfig(
+          host: _smtpHostController.text.trim(),
+          port: int.parse(_smtpPortController.text.trim()),
+          socketType: _smtpSocketType,
+        ),
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _errorMessage = '保存失败: $error';
+      });
+    }
+  }
+}
+
 class _SettingsSection extends StatelessWidget {
   const _SettingsSection({required this.title, required this.children})
     : child = null;
@@ -2344,7 +2877,7 @@ class _AccountsSection extends StatelessWidget {
           child: Center(child: CircularProgressIndicator()),
         ),
         error: (error, stackTrace) => _SettingsTile(
-          icon: Icons.error_outline_rounded,
+          icon: Symbols.error_outline_rounded,
           iconColor: context.colors.error,
           title: '账户加载失败',
           subtitle: '$error',
@@ -2363,7 +2896,7 @@ class _AccountsSection extends StatelessWidget {
             returnId: _addAccountReturnId,
             isFirst: true,
             isLast: true,
-            icon: Icons.person_add_alt_1_outlined,
+            icon: Symbols.person_add_alt,
             iconColor: context.colors.primary,
             title: '添加账户',
             subtitle: 'Gmail、Microsoft 或 IMAP',
@@ -2422,7 +2955,7 @@ class _AccountsSection extends StatelessWidget {
           returnId: _addAccountReturnId,
           isFirst: false,
           isLast: true,
-          icon: Icons.add_circle_outline_rounded,
+          icon: Symbols.add_circle_outline_rounded,
           iconColor: context.colors.primary,
           title: '添加账户',
           subtitle: 'Gmail、Microsoft 或 IMAP',
@@ -2546,7 +3079,8 @@ class _SettingsTile extends StatelessWidget {
               ),
             ),
           ),
-        if (onTap != null) Icon(Icons.chevron_right_rounded, color: labelColor),
+        if (onTap != null)
+          Icon(Symbols.chevron_right_rounded, color: labelColor),
       ],
     );
   }
@@ -2614,7 +3148,7 @@ class _AccountTileContent extends StatelessWidget {
     // 收束时手柄先消失再出现的闪烁。
     final dragHandle = SizedBox.square(
       dimension: 48,
-      child: Icon(Icons.drag_handle_rounded, color: colors.onSurfaceVariant),
+      child: Icon(Symbols.drag_handle_rounded, color: colors.onSurfaceVariant),
     );
 
     return ConstrainedBox(
@@ -2655,7 +3189,7 @@ class _AccountTileContent extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
-            Icon(Icons.chevron_right_rounded, color: colors.onSurfaceVariant),
+            Icon(Symbols.chevron_right_rounded, color: colors.onSurfaceVariant),
             if (dragIndex != null)
               Semantics(
                 label: '调整 ${account.displayName} 顺序',
@@ -2737,7 +3271,7 @@ class _AccountTileTrailing extends StatelessWidget {
       children: [
         child,
         const SizedBox(width: 8),
-        Icon(Icons.chevron_right_rounded, color: color),
+        Icon(Symbols.chevron_right_rounded, color: color),
       ],
     );
   }

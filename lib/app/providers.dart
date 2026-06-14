@@ -13,6 +13,7 @@ import '../data/secure/token_store.dart';
 import '../data/settings/app_font_settings.dart';
 import '../data/settings/account_settings.dart';
 import '../data/settings/display_settings.dart';
+import '../data/settings/imap_realtime_settings.dart';
 import '../data/settings/remote_image_trust.dart';
 import '../data/sync/body_prefetch_service.dart';
 import '../data/sync/realtime_sync_service.dart';
@@ -32,10 +33,14 @@ final databaseProvider = Provider<AppDatabase>((ref) {
 /// 应用包信息（版本号、构建号等）。在 [bootstrap] 中预读后通过 overrideWithValue
 /// 注入，这里给一个会抛错的占位，确保未初始化时快速失败（与 [databaseProvider] 同构）。
 final packageInfoProvider = Provider<PackageInfo>((ref) {
-  throw UnimplementedError('packageInfoProvider 必须在 ProviderScope overrides 中注入');
+  throw UnimplementedError(
+    'packageInfoProvider 必须在 ProviderScope overrides 中注入',
+  );
 });
 
 final tokenStoreProvider = Provider<TokenStore>((ref) => TokenStore());
+
+final realtimeSyncSettingsRevisionProvider = StateProvider<int>((ref) => 0);
 
 /// 当前应用字体。在 [bootstrap] 中读出持久化值后，通过 overrideWith 注入真实控制器，
 /// 这里给一个会抛错的占位，确保未初始化时能快速失败（与 [databaseProvider] 同构）。
@@ -170,16 +175,70 @@ final accountSettingsProvider =
       AccountSettings,
       String
     >((ref, accountId) {
-      final controller = AccountSettingsController(accountId);
+      final controller = AccountSettingsController(
+        accountId,
+        onRealtimeChanged: () {
+          ref.read(realtimeSyncSettingsRevisionProvider.notifier).state++;
+        },
+      );
       unawaited(controller.load());
       return controller;
     });
 
-/// 每个账户的设置控制器：二级设置页即时更新并持久化。
-class AccountSettingsController extends StateNotifier<AccountSettings> {
-  AccountSettingsController(this.accountId) : super(AccountSettings.defaults);
+final imapRealtimeSettingsProvider =
+    StateNotifierProvider.family<
+      ImapRealtimeSettingsController,
+      ImapRealtimeConfig,
+      String
+    >((ref, accountId) {
+      final controller = ImapRealtimeSettingsController(
+        accountId,
+        onChanged: () {
+          ref.read(realtimeSyncSettingsRevisionProvider.notifier).state++;
+        },
+      );
+      unawaited(controller.load());
+      return controller;
+    });
+
+class ImapRealtimeSettingsController extends StateNotifier<ImapRealtimeConfig> {
+  ImapRealtimeSettingsController(this.accountId, {this.onChanged})
+    : super(ImapRealtimeConfig.defaults);
 
   final String accountId;
+  final void Function()? onChanged;
+
+  Future<void> load() async {
+    state = await ImapRealtimeSettings.readConfigForAccount(accountId);
+  }
+
+  Future<void> setIdleEnabled(bool enabled) {
+    return _set(
+      state.copyWith(
+        mode: enabled ? ImapRealtimeMode.idle : ImapRealtimeMode.polling,
+      ),
+    );
+  }
+
+  Future<void> setPollingInterval(Duration interval) {
+    return _set(state.copyWith(pollingInterval: interval));
+  }
+
+  Future<void> _set(ImapRealtimeConfig config) async {
+    if (config == state) return;
+    state = config;
+    await ImapRealtimeSettings.writeConfigForAccount(accountId, config);
+    onChanged?.call();
+  }
+}
+
+/// 每个账户的设置控制器：二级设置页即时更新并持久化。
+class AccountSettingsController extends StateNotifier<AccountSettings> {
+  AccountSettingsController(this.accountId, {this.onRealtimeChanged})
+    : super(AccountSettings.defaults);
+
+  final String accountId;
+  final void Function()? onRealtimeChanged;
 
   Future<void> load() async {
     state = await AccountSettingsStore.read(accountId);
@@ -219,16 +278,20 @@ class AccountSettingsController extends StateNotifier<AccountSettings> {
     );
   }
 
-  Future<void> setReceiveEnabled(bool enabled) {
-    return _set(state.copyWith(receiveEnabled: enabled));
+  Future<void> setReceiveEnabled(bool enabled) async {
+    final changed = enabled != state.receiveEnabled;
+    await _set(state.copyWith(receiveEnabled: enabled));
+    if (changed) onRealtimeChanged?.call();
   }
 
   Future<void> setSendEnabled(bool enabled) {
     return _set(state.copyWith(sendEnabled: enabled));
   }
 
-  Future<void> setRealtimeSyncEnabled(bool enabled) {
-    return _set(state.copyWith(realtimeSyncEnabled: enabled));
+  Future<void> setRealtimeSyncEnabled(bool enabled) async {
+    final changed = enabled != state.realtimeSyncEnabled;
+    await _set(state.copyWith(realtimeSyncEnabled: enabled));
+    if (changed) onRealtimeChanged?.call();
   }
 
   Future<void> setFolderSyncScope(AccountFolderSyncScope scope) {

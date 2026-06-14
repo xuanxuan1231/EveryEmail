@@ -32,6 +32,10 @@ class ImapMailBackend implements MailBackend {
 
   em.MailClient? _client;
 
+  /// 当前 IDLE 监听的文件夹路径。同步其它文件夹会临时 SELECT 它们；完成后需要恢复
+  /// 到这个文件夹，否则长连接会悄悄变成监听最后同步的文件夹。
+  String? _idleFolderPath;
+
   /// 上次成功(重)连接的时刻。用于 OAuth 连接的过期自愈（见 [isStale]）。
   DateTime? _connectedAt;
 
@@ -141,7 +145,8 @@ class ImapMailBackend implements MailBackend {
     if (incoming is! em.ImapClient) return; // 仅 IMAP（非 POP）
 
     final host = account.imap?.host.toLowerCase() ?? '';
-    final isNetease = host.contains('163.com') ||
+    final isNetease =
+        host.contains('163.com') ||
         host.contains('126.com') ||
         host.contains('yeah.net') ||
         host.contains('netease');
@@ -329,6 +334,8 @@ class ImapMailBackend implements MailBackend {
   Future<SyncResult> syncDelta(MailboxFolder folder, SyncToken? token) async {
     final client = _client;
     if (client == null) throw const MailBackendException('未连接');
+    final wasPollingAtStart = client.isPolling();
+    final idleFolderPath = _idleFolderPath;
 
     try {
       final mailboxes = client.mailboxes;
@@ -395,7 +402,7 @@ class ImapMailBackend implements MailBackend {
       //    仅含 ref+flags，由 SyncService 按 ref 做 flags-only 更新。
       if (supportsCondStore && imap != null && prev.modSeq != null) {
         // 直接用底层 ImapClient 发 CHANGEDSINCE FETCH，绕过了 MailClient 的锁；
-        // 若此刻正在 IDLE 轮询，先暂停避免命令流冲突，取完再恢复。
+        // 若此刻正在 IDLE，先暂停避免命令流冲突，取完再恢复。
         final wasPolling = client.isPolling();
         if (wasPolling) await client.stopPolling();
         try {
@@ -431,6 +438,11 @@ class ImapMailBackend implements MailBackend {
       return SyncResult(added: added, updated: updated, newToken: newToken);
     } on em.MailException catch (e) {
       throw MailBackendException('同步失败: ${e.message}', cause: e);
+    } finally {
+      await _restoreIdleMailboxIfNeeded(
+        wasPolling: wasPollingAtStart,
+        folderPath: idleFolderPath,
+      );
     }
   }
 
@@ -569,6 +581,7 @@ class ImapMailBackend implements MailBackend {
       );
       final selected = await client.selectMailbox(mailbox);
       final uidValidity = selected.uidValidity ?? 0;
+      _idleFolderPath = folder.remoteId;
 
       subs.add(
         client.eventBus.on<em.MailLoadEvent>().listen((e) {
@@ -595,6 +608,11 @@ class ImapMailBackend implements MailBackend {
         }),
       );
       subs.add(
+        client.eventBus.on<em.MailConnectionLostEvent>().listen((_) {
+          controller.add(FolderChangedEvent(folder));
+        }),
+      );
+      subs.add(
         client.eventBus.on<em.MailConnectionReEstablishedEvent>().listen((_) {
           // 断线重连期间可能漏掉变更，触发一次重同步兜底。
           controller.add(FolderChangedEvent(folder));
@@ -616,9 +634,41 @@ class ImapMailBackend implements MailBackend {
         try {
           await client.stopPollingIfNeeded();
         } catch (_) {}
+        if (_idleFolderPath == folder.remoteId) {
+          _idleFolderPath = null;
+        }
       };
 
     return controller.stream;
+  }
+
+  Future<void> _restoreIdleMailboxIfNeeded({
+    required bool wasPolling,
+    required String? folderPath,
+  }) async {
+    if (!wasPolling || folderPath == null) return;
+    if (_idleFolderPath != folderPath) return;
+    final client = _client;
+    if (client == null) return;
+
+    try {
+      final mailboxes = client.mailboxes ?? await client.listMailboxes();
+      em.Mailbox? mailbox;
+      for (final mb in mailboxes) {
+        if (mb.path == folderPath) {
+          mailbox = mb;
+          break;
+        }
+      }
+      if (mailbox == null) return;
+
+      await client.selectMailbox(mailbox);
+      if (!client.isPolling()) {
+        await client.startPolling();
+      }
+    } catch (_) {
+      // 恢复 IDLE 失败不应掩盖本次同步结果；上层周期刷新/回前台会重建监听。
+    }
   }
 
   MailboxFolder _mapMailbox(em.Mailbox mb) {

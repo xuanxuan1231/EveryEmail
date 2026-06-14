@@ -2,6 +2,7 @@ import 'package:drift/drift.dart' hide Column;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:material_symbols_icons/symbols.dart';
 
 import '../../app/providers.dart';
 import '../../core/utils/id_generator.dart';
@@ -42,8 +43,9 @@ class PasswordPage extends ConsumerStatefulWidget {
 class _PasswordPageState extends ConsumerState<PasswordPage> {
   final _formKey = GlobalKey<FormState>();
   final _passwordController = TextEditingController();
-  late final TextEditingController _loginNameController =
-      TextEditingController(text: widget.loginName ?? widget.email);
+  late final TextEditingController _loginNameController = TextEditingController(
+    text: widget.loginName ?? widget.email,
+  );
   bool _obscurePassword = true;
   bool _isTesting = false;
   String? _errorMessage;
@@ -217,7 +219,7 @@ class _PasswordPageState extends ConsumerState<PasswordPage> {
                 child: Row(
                   children: [
                     Icon(
-                      Icons.info_outline,
+                      Symbols.info,
                       color: theme.colorScheme.onPrimaryContainer,
                     ),
                     const SizedBox(width: 12),
@@ -246,7 +248,7 @@ class _PasswordPageState extends ConsumerState<PasswordPage> {
                 child: Row(
                   children: [
                     Icon(
-                      Icons.info_outline,
+                      Symbols.info,
                       color: theme.colorScheme.onPrimaryContainer,
                     ),
                     const SizedBox(width: 12),
@@ -279,7 +281,7 @@ class _PasswordPageState extends ConsumerState<PasswordPage> {
               // OAuth 登录按钮
               FilledButton.icon(
                 onPressed: _isTesting ? null : _loginWithOAuth,
-                icon: const Icon(Icons.login),
+                icon: const Icon(Symbols.login),
                 label: const Text('使用 Microsoft 账号登录'),
                 style: FilledButton.styleFrom(
                   minimumSize: const Size.fromHeight(48),
@@ -312,7 +314,7 @@ class _PasswordPageState extends ConsumerState<PasswordPage> {
               decoration: const InputDecoration(
                 labelText: '登录名',
                 hintText: '通常为完整邮箱地址',
-                prefixIcon: Icon(Icons.person_outline),
+                prefixIcon: Icon(Symbols.person_outline),
                 border: OutlineInputBorder(),
               ),
               validator: (value) {
@@ -332,10 +334,12 @@ class _PasswordPageState extends ConsumerState<PasswordPage> {
               decoration: InputDecoration(
                 labelText: '密码',
                 hintText: '输入邮箱密码',
-                prefixIcon: const Icon(Icons.lock_outline),
+                prefixIcon: const Icon(Symbols.lock_outline),
                 suffixIcon: IconButton(
                   icon: Icon(
-                    _obscurePassword ? Icons.visibility : Icons.visibility_off,
+                    _obscurePassword
+                        ? Symbols.visibility
+                        : Symbols.visibility_off,
                   ),
                   onPressed: () {
                     setState(() {
@@ -372,7 +376,7 @@ class _PasswordPageState extends ConsumerState<PasswordPage> {
                 ),
                 child: Row(
                   children: [
-                    Icon(Icons.error_outline, color: theme.colorScheme.error),
+                    Icon(Symbols.error_outline, color: theme.colorScheme.error),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(

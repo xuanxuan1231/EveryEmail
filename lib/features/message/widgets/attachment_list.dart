@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:material_symbols_icons/symbols.dart';
 import 'package:open_filex/open_filex.dart';
 
 import '../../../app/providers.dart';
@@ -34,7 +35,7 @@ class AttachmentList extends StatelessWidget {
         Row(
           children: [
             Icon(
-              Icons.attach_file,
+              Symbols.attach_file,
               size: 20,
               color: theme.colorScheme.onSurfaceVariant,
             ),
@@ -180,7 +181,7 @@ class _AttachmentItemState extends ConsumerState<_AttachmentItem> {
     final downloaded = widget.attachment.localPath != null;
     return IconButton(
       icon: Icon(
-        downloaded ? Icons.check_circle : Icons.download,
+        downloaded ? Symbols.check_circle : Symbols.download,
         color: downloaded
             ? theme.colorScheme.primary
             : theme.colorScheme.onSurfaceVariant,

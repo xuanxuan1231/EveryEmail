@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:material_symbols_icons/symbols.dart';
 
 import '../../../app/providers.dart';
 import '../../../data/local/database/app_database.dart';
@@ -32,18 +33,12 @@ class FolderPickerDialog extends ConsumerWidget {
               padding: const EdgeInsets.all(16),
               child: Row(
                 children: [
-                  Icon(
-                    Icons.folder_outlined,
-                    color: theme.colorScheme.primary,
-                  ),
+                  Icon(Symbols.folder, color: theme.colorScheme.primary),
                   const SizedBox(width: 12),
-                  Text(
-                    '选择文件夹',
-                    style: theme.textTheme.titleLarge,
-                  ),
+                  Text('选择文件夹', style: theme.textTheme.titleLarge),
                   const Spacer(),
                   IconButton(
-                    icon: const Icon(Icons.close),
+                    icon: const Icon(Symbols.close),
                     onPressed: () => Navigator.of(context).pop(),
                   ),
                 ],
@@ -106,7 +101,9 @@ class FolderPickerDialog extends ConsumerWidget {
                         title: Text(
                           folder.displayName,
                           style: TextStyle(
-                            fontWeight: isCurrent ? FontWeight.w600 : FontWeight.normal,
+                            fontWeight: isCurrent
+                                ? FontWeight.w600
+                                : FontWeight.normal,
                             color: isCurrent ? theme.colorScheme.primary : null,
                           ),
                         ),
@@ -115,7 +112,7 @@ class FolderPickerDialog extends ConsumerWidget {
                             : null,
                         trailing: isCurrent
                             ? Icon(
-                                Icons.check,
+                                Symbols.check,
                                 color: theme.colorScheme.primary,
                               )
                             : null,
@@ -138,19 +135,19 @@ class FolderPickerDialog extends ConsumerWidget {
   IconData _getFolderIcon(FolderType type) {
     switch (type) {
       case FolderType.inbox:
-        return Icons.inbox;
+        return Symbols.inbox;
       case FolderType.sent:
-        return Icons.send;
+        return Symbols.send;
       case FolderType.drafts:
-        return Icons.drafts;
+        return Symbols.drafts;
       case FolderType.archive:
-        return Icons.archive;
+        return Symbols.archive;
       case FolderType.spam:
-        return Icons.report;
+        return Symbols.report;
       case FolderType.trash:
-        return Icons.delete;
+        return Symbols.delete;
       case FolderType.custom:
-        return Icons.folder;
+        return Symbols.folder;
     }
   }
 }

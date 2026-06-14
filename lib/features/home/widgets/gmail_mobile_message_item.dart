@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:material_symbols_icons/symbols.dart';
 
 import '../../../core/theme/mail_list_colors.dart';
 import '../../../data/local/database/app_database.dart';
@@ -200,7 +201,7 @@ class GmailMobileMessageCardContent extends StatelessWidget {
                             Padding(
                               padding: const EdgeInsets.only(top: 1),
                               child: Icon(
-                                Icons.attach_file,
+                                Symbols.attach_file,
                                 size: 18,
                                 color: secondaryText,
                               ),
@@ -286,8 +287,8 @@ class GmailMobileMessageCardContent extends StatelessWidget {
                                     padding: const EdgeInsets.all(4),
                                     child: Icon(
                                       isFlagged
-                                          ? Icons.star
-                                          : Icons.star_border_outlined,
+                                          ? Symbols.star
+                                          : Symbols.star_border,
                                       size: 22,
                                       color: isFlagged
                                           ? _starColor(colors)
@@ -336,7 +337,8 @@ class GmailMobileMessageCardContent extends StatelessWidget {
     );
   }
 
-  Widget _buildAccountIndicator(ThemeData theme) {    final color = _toneListAccent(
+  Widget _buildAccountIndicator(ThemeData theme) {
+    final color = _toneListAccent(
       accountColor ?? theme.colorScheme.outline,
       theme,
     );
@@ -366,7 +368,7 @@ class GmailMobileMessageCardContent extends StatelessWidget {
         shape: BoxShape.circle,
         color: theme.colorScheme.primary,
       ),
-      child: Icon(Icons.check, color: theme.colorScheme.onPrimary, size: 24),
+      child: Icon(Symbols.check, color: theme.colorScheme.onPrimary, size: 24),
     );
   }
 

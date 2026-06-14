@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:m3e_core/m3e_core.dart';
+import 'package:material_symbols_icons/symbols.dart';
 
 import '../../app/providers.dart';
 import '../../core/navigation/predictive_back_shared_element.dart';
@@ -172,7 +173,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
         actions: [
           if (_hasQuery)
             IconButton(
-              icon: const Icon(Icons.clear),
+              icon: const Icon(Symbols.clear),
               onPressed: () {
                 _searchController.clear();
                 _scheduleSearch('');
@@ -227,7 +228,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(
-            Icons.search,
+            Symbols.search,
             size: 80,
             color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
           ),
@@ -256,7 +257,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(
-            Icons.search_off,
+            Symbols.search_off,
             size: 80,
             color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
           ),

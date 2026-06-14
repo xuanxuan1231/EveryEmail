@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:m3e_core/m3e_core.dart';
+import 'package:material_symbols_icons/symbols.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../app/providers.dart';
@@ -248,12 +249,12 @@ class _MessageDetailPageState extends ConsumerState<MessageDetailPage> {
         surfaceTintColor: Colors.transparent,
         actions: [
           IconButton(
-            icon: const Icon(Icons.archive_outlined),
+            icon: const Icon(Symbols.archive),
             tooltip: '归档',
             onPressed: _archiveMessage,
           ),
           IconButton(
-            icon: const Icon(Icons.delete_outline),
+            icon: const Icon(Symbols.delete_outline),
             tooltip: '删除',
             onPressed: _deleteMessage,
           ),
@@ -267,9 +268,7 @@ class _MessageDetailPageState extends ConsumerState<MessageDetailPage> {
               final isRead = (flags & (1 << MessageFlag.seen.index)) != 0;
               return IconButton(
                 icon: Icon(
-                  isRead
-                      ? Icons.mark_email_unread_outlined
-                      : Icons.mark_email_read_outlined,
+                  isRead ? Symbols.mark_email_unread : Symbols.mark_email_read,
                 ),
                 tooltip: isRead ? '标为未读' : '标为已读',
                 onPressed: () => _toggleRead(isRead),
@@ -278,7 +277,7 @@ class _MessageDetailPageState extends ConsumerState<MessageDetailPage> {
           ),
           PopupMenuButton<String>(
             tooltip: '更多',
-            icon: const Icon(Icons.more_vert),
+            icon: const Icon(Symbols.more_vert),
             onSelected: (value) {
               switch (value) {
                 case 'move':
@@ -294,7 +293,7 @@ class _MessageDetailPageState extends ConsumerState<MessageDetailPage> {
                 value: 'move',
                 child: Row(
                   children: [
-                    Icon(Icons.drive_file_move_outline),
+                    Icon(Symbols.drive_file_move_outline),
                     SizedBox(width: 12),
                     Text('移动到'),
                   ],
@@ -304,7 +303,7 @@ class _MessageDetailPageState extends ConsumerState<MessageDetailPage> {
                 value: 'print',
                 child: Row(
                   children: [
-                    Icon(Icons.print_outlined),
+                    Icon(Symbols.print),
                     SizedBox(width: 12),
                     Text('全部打印'),
                   ],
@@ -314,7 +313,7 @@ class _MessageDetailPageState extends ConsumerState<MessageDetailPage> {
                 value: 'help',
                 child: Row(
                   children: [
-                    Icon(Icons.help_outline),
+                    Icon(Symbols.help_outline),
                     SizedBox(width: 12),
                     Text('帮助和反馈'),
                   ],
@@ -343,7 +342,7 @@ class _MessageDetailPageState extends ConsumerState<MessageDetailPage> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Icon(
-                    Icons.error_outline,
+                    Symbols.error_outline,
                     size: 64,
                     color: theme.colorScheme.error,
                   ),
@@ -369,7 +368,7 @@ class _MessageDetailPageState extends ConsumerState<MessageDetailPage> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Icon(
-                    Icons.mail_outline,
+                    Symbols.mail_outline,
                     size: 64,
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
@@ -554,7 +553,7 @@ class _ThreadContentState extends ConsumerState<_ThreadContent> {
                               (flags & (1 << MessageFlag.flagged.index)) != 0;
                           return IconButton(
                             icon: Icon(
-                              isFlagged ? Icons.star : Icons.star_border,
+                              isFlagged ? Symbols.star : Symbols.star_border,
                             ),
                             color: isFlagged ? const Color(0xFFE0A100) : null,
                             tooltip: isFlagged ? '取消星标' : '星标',
@@ -875,7 +874,7 @@ class _MessageBodyState extends ConsumerState<_MessageBody> {
                 const SizedBox(height: 8),
                 TextButton.icon(
                   onPressed: _downloading ? null : () => _download(force: true),
-                  icon: const Icon(Icons.refresh),
+                  icon: const Icon(Symbols.refresh),
                   label: const Text('重新下载'),
                 ),
               ],
@@ -948,11 +947,7 @@ class _MessageBodyState extends ConsumerState<_MessageBody> {
       ),
       child: Column(
         children: [
-          Icon(
-            Icons.cloud_off_outlined,
-            size: 48,
-            color: theme.colorScheme.error,
-          ),
+          Icon(Symbols.cloud_off, size: 48, color: theme.colorScheme.error),
           const SizedBox(height: 8),
           Text(
             '正文下载失败',
@@ -973,7 +968,7 @@ class _MessageBodyState extends ConsumerState<_MessageBody> {
           const SizedBox(height: 12),
           FilledButton.icon(
             onPressed: _downloading ? null : () => _download(force: true),
-            icon: const Icon(Icons.refresh),
+            icon: const Icon(Symbols.refresh),
             label: const Text('重试'),
           ),
         ],
