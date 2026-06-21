@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
@@ -9,13 +11,14 @@ import 'package:flutter/foundation.dart';
 ///
 /// FCM token 的注册/注销与 provider 无关（`/api/register-fcm`），仍复用 [WebhookService]。
 class GmailPushService {
-  GmailPushService({
-    required this.workerUrl,
-  }) : _dio = Dio(BaseOptions(
+  GmailPushService({required this.workerUrl})
+    : _dio = Dio(
+        BaseOptions(
           baseUrl: workerUrl,
           connectTimeout: const Duration(seconds: 10),
           receiveTimeout: const Duration(seconds: 10),
-        ));
+        ),
+      );
 
   final String workerUrl;
   final Dio _dio;
@@ -31,14 +34,16 @@ class GmailPushService {
     required String email,
   }) async {
     try {
-      final response = await _dio.post(
-        '/api/gmail/watch',
-        data: {
-          'refreshToken': refreshToken,
-          'userId': userId,
-          'accountId': accountId,
-          'email': email,
-        },
+      final response = await _retry(
+        () => _dio.post(
+          '/api/gmail/watch',
+          data: {
+            'refreshToken': refreshToken,
+            'userId': userId,
+            'accountId': accountId,
+            'email': email,
+          },
+        ),
       );
 
       return GmailWatchResult(
@@ -61,13 +66,11 @@ class GmailPushService {
     required String email,
   }) async {
     try {
-      await _dio.post(
-        '/api/gmail/stop',
-        data: {
-          'userId': userId,
-          'accountId': accountId,
-          'email': email,
-        },
+      await _retry(
+        () => _dio.post(
+          '/api/gmail/stop',
+          data: {'userId': userId, 'accountId': accountId, 'email': email},
+        ),
       );
       return true;
     } on DioException catch (e) {
@@ -76,6 +79,36 @@ class GmailPushService {
       );
       return false;
     }
+  }
+
+  Future<T> _retry<T>(Future<T> Function() op, {int maxAttempts = 3}) async {
+    var attempt = 0;
+    while (true) {
+      try {
+        return await op();
+      } on DioException catch (e) {
+        attempt++;
+        if (attempt >= maxAttempts || !_isRetryable(e)) rethrow;
+        await Future<void>.delayed(_backoff(attempt));
+      }
+    }
+  }
+
+  bool _isRetryable(DioException e) {
+    final status = e.response?.statusCode;
+    if (status == 408 || status == 429 || (status != null && status >= 500)) {
+      return true;
+    }
+    return e.type == DioExceptionType.connectionTimeout ||
+        e.type == DioExceptionType.sendTimeout ||
+        e.type == DioExceptionType.receiveTimeout ||
+        e.type == DioExceptionType.connectionError;
+  }
+
+  Duration _backoff(int attempt) {
+    final base = 400 * (1 << (attempt - 1));
+    final jitter = math.Random().nextInt(200);
+    return Duration(milliseconds: (base + jitter).clamp(0, 4000));
   }
 
   String _dioErrorMessage(DioException e, String fallback) {

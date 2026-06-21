@@ -42,7 +42,8 @@ class WebhookManager {
   /// v3: created+updated —— created 发通知消息，updated 发静默数据消息（仅触发同步，不打扰用户）。
   /// v4: 强制重建订阅，确保已部署的富通知加密配置被应用到 Graph subscription。
   /// v5: 富通知 resource 补 `$select`，满足 Graph rich notification 校验。
-  static const int _subscriptionSchemaVersion = 5;
+  /// v6: Graph subscription resource 改为无前导斜杠的规范格式。
+  static const int _subscriptionSchemaVersion = 6;
 
   // ---------- 单账户启用/禁用 ----------
 
