@@ -139,9 +139,7 @@ class RemoteImageTrustStore {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getStringList(_trustedSendersKey) ?? const <String>[];
     final senders = <String>{
-      for (final entry in raw)
-        if (RemoteImageTrust.normalizeSenderEmail(entry) case final email?)
-          email,
+      for (final entry in raw) ?RemoteImageTrust.normalizeSenderEmail(entry),
     };
     return RemoteImageTrust(
       trustedSenders: senders,
