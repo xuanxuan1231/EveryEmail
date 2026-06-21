@@ -8,6 +8,8 @@ import 'package:everyemail/data/secure/token_store.dart';
 import 'package:everyemail/data/sync/sync_service.dart';
 import 'package:everyemail/domain/enums/account_enums.dart';
 import 'package:everyemail/domain/enums/message_enums.dart';
+import 'package:everyemail/domain/models/mail_address.dart';
+import 'package:everyemail/domain/models/outgoing_message.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// 回归测试：标记已读/未读必须为各后端正确入队 outbox。
@@ -135,6 +137,43 @@ void main() {
     expect(pending, isEmpty);
   });
 
+  test('保存本地草稿会持久化 Bcc 收件人', () async {
+    await db.accountDao.upsertAccount(
+      AccountsCompanion.insert(
+        id: 'acc-draft',
+        email: 'me@example.com',
+        displayName: '我',
+        accountType: AccountType.genericImap,
+        authType: AuthType.password,
+      ),
+    );
+    await db.folderDao.upsertFolder(
+      FoldersCompanion.insert(
+        id: 'drafts-1',
+        accountId: 'acc-draft',
+        remoteId: 'Drafts',
+        displayName: '草稿',
+        folderType: FolderType.drafts,
+      ),
+    );
+
+    final draftId = await sync.saveLocalDraft(
+      accountId: 'acc-draft',
+      message: const OutgoingMessage(
+        from: MailAddress(email: 'me@example.com'),
+        to: [MailAddress(email: 'to@example.com')],
+        cc: [MailAddress(email: 'cc@example.com')],
+        bcc: [MailAddress(email: 'hidden@example.com', name: 'Hidden')],
+        subject: 'draft',
+        text: 'body',
+      ),
+    );
+
+    final saved = await db.messageDao.getMessage(draftId!);
+    expect(saved!.bccRecipients, contains('hidden@example.com'));
+    expect(saved.bccRecipients, contains('Hidden'));
+  });
+
   test('先已读后立刻未读：去重，仅保留最新意图', () async {
     final folderId = await seedAccountAndFolder();
     await db.messageDao.upsertMessage(
@@ -194,7 +233,11 @@ void main() {
       ),
     );
 
-    await sync.setMessageFlag('msg-star', flag: MessageFlag.flagged, value: true);
+    await sync.setMessageFlag(
+      'msg-star',
+      flag: MessageFlag.flagged,
+      value: true,
+    );
 
     expect((await db.folderDao.getFolder(folderId))!.unreadCount, 3);
   });

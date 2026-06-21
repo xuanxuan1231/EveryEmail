@@ -20,7 +20,7 @@ const double _messageHeaderAvatarTextSize = 18;
 /// - 展开区：发件人 / 收件人 / 抄送的完整 `name<email>` 与明确的完整发件时间，
 ///   撑满列表行宽度减去两侧内距（不缩进到头像下方）。
 ///
-/// 回复 / 转发 / 打印暂无对应能力，先弹占位提示；星标走 [MessageFlag.flagged]。
+/// 回复 / 转发由阅读页注入，打印暂无对应能力先弹占位提示；星标走 [MessageFlag.flagged]。
 class MessageHeaderTile extends ConsumerStatefulWidget {
   const MessageHeaderTile({
     required this.message,
@@ -28,6 +28,8 @@ class MessageHeaderTile extends ConsumerStatefulWidget {
     required this.displaySettings,
     required this.collapsed,
     required this.onToggleCollapsed,
+    required this.onReply,
+    required this.onForward,
     super.key,
   });
 
@@ -44,6 +46,9 @@ class MessageHeaderTile extends ConsumerStatefulWidget {
 
   /// 点击头像那一行时切换正文折叠。
   final VoidCallback onToggleCollapsed;
+
+  final VoidCallback onReply;
+  final VoidCallback onForward;
 
   @override
   ConsumerState<MessageHeaderTile> createState() => _MessageHeaderTileState();
@@ -97,7 +102,7 @@ class _MessageHeaderTileState extends ConsumerState<MessageHeaderTile> {
                     _buildActionButton(
                       icon: Symbols.reply,
                       tooltip: '回复',
-                      onPressed: () => _notImplemented('回复'),
+                      onPressed: widget.onReply,
                     ),
                     _buildMoreButton(isFlagged: isFlagged),
                   ],
@@ -233,7 +238,7 @@ class _MessageHeaderTileState extends ConsumerState<MessageHeaderTile> {
       onSelected: (value) {
         switch (value) {
           case 'forward':
-            _notImplemented('转发');
+            widget.onForward();
           case 'star':
             _toggleStar(isFlagged);
           case 'print':

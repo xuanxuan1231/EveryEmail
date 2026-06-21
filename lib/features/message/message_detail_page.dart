@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,8 +13,13 @@ import '../../core/navigation/predictive_back_shared_element.dart';
 import '../../core/theme/mail_list_colors.dart';
 import '../../data/local/database/app_database.dart';
 import '../../data/settings/remote_image_trust.dart';
+import '../../data/sync/outgoing_attachment_store.dart';
 import '../../domain/enums/message_enums.dart';
+import '../../domain/models/mail_address.dart';
 import '../../domain/models/mail_attachment.dart';
+import '../../domain/models/mail_recipient.dart';
+import '../../domain/models/outgoing_message.dart';
+import '../compose/compose_args.dart';
 import '../home/widgets/gmail_mobile_message_item.dart';
 import 'widgets/attachment_list.dart';
 import 'widgets/folder_picker_dialog.dart';
@@ -230,11 +236,243 @@ class _MessageDetailPageState extends ConsumerState<MessageDetailPage> {
     }
   }
 
-  /// 暂未实现的功能（回复/转发/打印/帮助等）：先弹占位提示。
+  /// 暂未实现的功能（打印/帮助等）：先弹占位提示。
   void _notImplemented(String label) {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text('$label功能开发中')));
+  }
+
+  /// 打开撰写页进行回复 / 全部回复 / 转发。
+  ///
+  /// 作用于进入详情页的入口邮件（= 会话代表邮件，与归档/删除等动作一致）。预填
+  /// 收件人、Re:/Fwd: 主题、引用原文，并带上 In-Reply-To/References 以归并会话；
+  /// 正文优先取已下载的纯文本，缺失时按需下载一次再退回 HTML 转纯文本 / 预览。
+  Future<void> _openCompose(ComposeMode mode, {String? targetMessageId}) async {
+    final db = ref.read(databaseProvider);
+    final sourceMessageId = targetMessageId ?? messageId;
+    final message = await db.messageDao.getMessage(sourceMessageId);
+    if (message == null || !mounted) return;
+
+    // 取正文用于引用：本地没有就按需下载一次（失败则退回空引用，不阻断撰写）。
+    var body = await db.messageDao.getBody(sourceMessageId);
+    if (body == null || body.fetchState == BodyFetchState.notDownloaded) {
+      try {
+        await ref.read(syncServiceProvider).fetchMessageBody(sourceMessageId);
+        body = await db.messageDao.getBody(sourceMessageId);
+      } catch (_) {
+        // 忽略：引用为空也能回复/转发。
+      }
+    }
+    if (!mounted) return;
+
+    final originalText = _originalBodyText(body, message.preview);
+    final accounts =
+        ref.read(accountsStreamProvider).value ?? const <Account>[];
+    final selfEmails = <String>{
+      for (final a in accounts) a.email.trim().toLowerCase(),
+    };
+
+    final from = message.fromEmail == null
+        ? null
+        : MailAddress(email: message.fromEmail!, name: message.fromName);
+    final originalTo = _asAddresses(message.toRecipients);
+    final originalCc = _asAddresses(message.ccRecipients);
+
+    List<MailAddress> to;
+    List<MailAddress> cc;
+    switch (mode) {
+      case ComposeMode.forward:
+        to = const [];
+        cc = const [];
+      case ComposeMode.replyAll:
+        to = [?from];
+        cc = [...originalTo, ...originalCc]
+            .where(
+              (a) =>
+                  !selfEmails.contains(a.email.trim().toLowerCase()) &&
+                  a.email.trim().toLowerCase() !=
+                      from?.email.trim().toLowerCase(),
+            )
+            .toList();
+        cc = _dedupeAddresses(cc);
+      case ComposeMode.reply:
+      case ComposeMode.newMail:
+      case ComposeMode.draft:
+        to = [?from];
+        cc = const [];
+    }
+
+    final subject = mode == ComposeMode.forward
+        ? _ensurePrefix(message.subject, 'Fwd:')
+        : _ensurePrefix(message.subject, 'Re:');
+
+    final bodyText = mode == ComposeMode.forward
+        ? _buildForwardQuote(message, from, originalTo, originalText)
+        : _buildReplyQuote(message, from, originalText);
+
+    final references = _buildReferences(message);
+
+    // 转发：带上原邮件的附件（内联图片随 HTML 引用，纯文本转发用不到，跳过）。
+    final attachments = mode == ComposeMode.forward
+        ? await _gatherForwardAttachments(sourceMessageId, body)
+        : const <OutgoingAttachment>[];
+
+    if (!mounted) return;
+    context.push(
+      '/compose',
+      extra: ComposeArgs(
+        mode: mode,
+        accountId: message.accountId,
+        to: to,
+        cc: cc,
+        subject: subject,
+        bodyText: bodyText,
+        inReplyTo: mode == ComposeMode.forward
+            ? null
+            : _ensureAngle(message.messageIdHeader),
+        references: mode == ComposeMode.forward ? const [] : references,
+        sourceMessageId: message.graphMessageId,
+        attachments: attachments,
+      ),
+    );
+  }
+
+  /// 收集转发所需的原邮件附件：逐个确保已下载到本地，再复制进发件暂存目录
+  /// （独立副本，避免发送成功后清理误删原邮件的附件缓存）。失败的附件跳过。
+  Future<List<OutgoingAttachment>> _gatherForwardAttachments(
+    String sourceMessageId,
+    MessageBody? body,
+  ) async {
+    final metas = AttachmentUtils.parseAttachments(
+      body?.attachmentsMeta,
+    ).where((a) => !a.isInline && (a.filename?.isNotEmpty ?? false)).toList();
+    if (metas.isEmpty) return const [];
+
+    final syncService = ref.read(syncServiceProvider);
+    final out = <OutgoingAttachment>[];
+    for (final meta in metas) {
+      try {
+        var path = meta.localPath;
+        if (path == null || !File(path).existsSync()) {
+          path = await syncService.downloadAttachment(
+            messageId: sourceMessageId,
+            partId: meta.partId,
+          );
+        }
+        out.add(
+          await OutgoingAttachmentStore.stageFile(
+            path,
+            filename: meta.filename ?? 'attachment',
+          ),
+        );
+      } catch (_) {
+        // 单个附件失败不影响转发其余内容。
+      }
+    }
+    return out;
+  }
+
+  List<MailAddress> _asAddresses(String recipientsJson) {
+    return RecipientUtils.parseRecipients(
+      recipientsJson,
+    ).map((r) => MailAddress(email: r.email, name: r.name)).toList();
+  }
+
+  List<MailAddress> _dedupeAddresses(List<MailAddress> addresses) {
+    final seen = <String>{};
+    final out = <MailAddress>[];
+    for (final a in addresses) {
+      if (seen.add(a.email.trim().toLowerCase())) out.add(a);
+    }
+    return out;
+  }
+
+  /// 引用正文的来源：优先纯文本，否则 HTML 转纯文本，再否则信封预览。
+  String _originalBodyText(MessageBody? body, String preview) {
+    final plain = body?.plainText;
+    if (plain != null && plain.trim().isNotEmpty) return plain;
+    final html = body?.htmlBody;
+    if (html != null && html.trim().isNotEmpty) return _htmlToPlain(html);
+    return preview;
+  }
+
+  String _buildReplyQuote(Message message, MailAddress? from, String text) {
+    final who = from?.displayName ?? from?.email ?? '对方';
+    final quoted = text.split('\n').map((line) => '> $line').join('\n');
+    return '\n\n在 ${_formatDate(message.date)}，$who 写道：\n$quoted';
+  }
+
+  String _buildForwardQuote(
+    Message message,
+    MailAddress? from,
+    List<MailAddress> to,
+    String text,
+  ) {
+    final buffer = StringBuffer()
+      ..write('\n\n---------- 转发邮件 ----------\n')
+      ..write('发件人: ${from?.toString() ?? message.fromEmail ?? ''}\n')
+      ..write('日期: ${_formatDate(message.date)}\n')
+      ..write('主题: ${message.subject}\n')
+      ..write('收件人: ${to.map((a) => a.toString()).join(', ')}\n\n')
+      ..write(text);
+    return buffer.toString();
+  }
+
+  /// References 链：原邮件的会话根（IMAP threadKey，形如 Message-ID）+ 原邮件
+  /// 自身的 Message-ID。Gmail/Graph 的 threadKey 是 threadId/conversationId（非
+  /// Message-ID，不含 '@'），不应混入 References，故按 '@' 启发式过滤。
+  List<String> _buildReferences(Message message) {
+    final refs = <String>[];
+    final tk = message.threadKey;
+    if (tk != null && tk.contains('@')) refs.add(_ensureAngle(tk)!);
+    final mid = _ensureAngle(message.messageIdHeader);
+    if (mid != null && !refs.contains(mid)) refs.add(mid);
+    return refs;
+  }
+
+  String? _ensureAngle(String? id) {
+    if (id == null) return null;
+    final v = id.trim();
+    if (v.isEmpty) return null;
+    if (v.startsWith('<') && v.endsWith('>')) return v;
+    return '<$v>';
+  }
+
+  String _ensurePrefix(String subject, String prefix) {
+    final s = subject.trim();
+    final lower = s.toLowerCase();
+    final p = prefix.toLowerCase();
+    // 已有 Re:/Fwd:（含全角冒号）前缀则不重复添加。
+    if (lower.startsWith(p) || lower.startsWith(p.replaceAll(':', '：'))) {
+      return s.isEmpty ? prefix : s;
+    }
+    return s.isEmpty ? prefix : '$prefix $s';
+  }
+
+  /// 极简 HTML→纯文本：去标签、还原常见实体、压缩多余空行。仅用于回复/转发引用。
+  String _htmlToPlain(String html) {
+    var text = html
+        .replaceAll(RegExp(r'<\s*br\s*/?>', caseSensitive: false), '\n')
+        .replaceAll(
+          RegExp(r'</\s*(p|div|tr|li|h[1-6])\s*>', caseSensitive: false),
+          '\n',
+        )
+        .replaceAll(RegExp(r'<[^>]+>'), '');
+    text = text
+        .replaceAll('&nbsp;', ' ')
+        .replaceAll('&amp;', '&')
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&#39;', "'");
+    return text.replaceAll(RegExp(r'\n{3,}'), '\n\n').trim();
+  }
+
+  String _formatDate(DateTime date) {
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${date.year}-${two(date.month)}-${two(date.day)} '
+        '${two(date.hour)}:${two(date.minute)}';
   }
 
   @override
@@ -275,11 +513,20 @@ class _MessageDetailPageState extends ConsumerState<MessageDetailPage> {
               );
             },
           ),
+          IconButton(
+            icon: const Icon(Symbols.reply),
+            tooltip: '回复',
+            onPressed: () => _openCompose(ComposeMode.reply),
+          ),
           PopupMenuButton<String>(
             tooltip: '更多',
             icon: const Icon(Symbols.more_vert),
             onSelected: (value) {
               switch (value) {
+                case 'replyAll':
+                  _openCompose(ComposeMode.replyAll);
+                case 'forward':
+                  _openCompose(ComposeMode.forward);
                 case 'move':
                   _moveMessage();
                 case 'print':
@@ -289,6 +536,27 @@ class _MessageDetailPageState extends ConsumerState<MessageDetailPage> {
               }
             },
             itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'replyAll',
+                child: Row(
+                  children: [
+                    Icon(Symbols.reply_all),
+                    SizedBox(width: 12),
+                    Text('全部回复'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'forward',
+                child: Row(
+                  children: [
+                    Icon(Symbols.forward),
+                    SizedBox(width: 12),
+                    Text('转发'),
+                  ],
+                ),
+              ),
+              const PopupMenuDivider(),
               const PopupMenuItem(
                 value: 'move',
                 child: Row(
@@ -391,7 +659,11 @@ class _MessageDetailPageState extends ConsumerState<MessageDetailPage> {
             sourceBackgroundColor: theme.colorScheme.surface,
           );
 
-          return _ThreadContent(key: ValueKey(message.id), entry: message);
+          return _ThreadContent(
+            key: ValueKey(message.id),
+            entry: message,
+            onOpenCompose: _openCompose,
+          );
         },
       ),
     );
@@ -414,6 +686,7 @@ bool _sameVisibleMessage(Message? previous, Message? next) {
       previous.fromEmail == next.fromEmail &&
       previous.toRecipients == next.toRecipients &&
       previous.ccRecipients == next.ccRecipients &&
+      previous.bccRecipients == next.bccRecipients &&
       previous.date == next.date;
 }
 
@@ -424,10 +697,17 @@ bool _sameVisibleMessage(Message? previous, Message? next) {
 /// 展开过的用 Offstage 保活，再次折叠不丢状态。打开会话即把其中所有未读标为已读。
 /// threadKey 为空时退化为单封会话。
 class _ThreadContent extends ConsumerStatefulWidget {
-  const _ThreadContent({required this.entry, super.key});
+  const _ThreadContent({
+    required this.entry,
+    required this.onOpenCompose,
+    super.key,
+  });
 
   /// 进入会话的入口邮件（列表里点中的代表邮件），提供 accountId/threadKey。
   final Message entry;
+
+  final Future<void> Function(ComposeMode mode, {String? targetMessageId})
+  onOpenCompose;
 
   @override
   ConsumerState<_ThreadContent> createState() => _ThreadContentState();
@@ -591,6 +871,18 @@ class _ThreadContentState extends ConsumerState<_ThreadContent> {
                           displaySettings: displaySettings,
                           collapsed: !expanded,
                           onToggleCollapsed: () => _toggleExpanded(message.id),
+                          onReply: () => unawaited(
+                            widget.onOpenCompose(
+                              ComposeMode.reply,
+                              targetMessageId: message.id,
+                            ),
+                          ),
+                          onForward: () => unawaited(
+                            widget.onOpenCompose(
+                              ComposeMode.forward,
+                              targetMessageId: message.id,
+                            ),
+                          ),
                         ),
                         if (mountBody)
                           Offstage(
@@ -695,6 +987,7 @@ bool _sameThread(List<Message> a, List<Message> b) {
         x.fromEmail != y.fromEmail ||
         x.toRecipients != y.toRecipients ||
         x.ccRecipients != y.ccRecipients ||
+        x.bccRecipients != y.bccRecipients ||
         x.date != y.date) {
       return false;
     }
@@ -725,6 +1018,7 @@ class _MessageBody extends ConsumerStatefulWidget {
 
 class _MessageBodyState extends ConsumerState<_MessageBody> {
   late final Stream<MessageBody?> _bodyStream;
+  final GlobalKey _attachmentsKey = GlobalKey();
   bool _downloading = false;
   Object? _error;
   bool _autoTriggered = false;
@@ -829,6 +1123,13 @@ class _MessageBodyState extends ConsumerState<_MessageBody> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (attachments.isNotEmpty) ...[
+          _AttachmentJumpButton(
+            attachmentCount: attachments.length,
+            onPressed: _scrollToAttachments,
+          ),
+          const SizedBox(height: 12),
+        ],
         if (hasHtml)
           MessageHtmlView(
             htmlBody: body.htmlBody!,
@@ -884,9 +1185,24 @@ class _MessageBodyState extends ConsumerState<_MessageBody> {
         // 附件（字节按需下载，这里只列元数据）。
         if (attachments.isNotEmpty) ...[
           const SizedBox(height: 24),
-          AttachmentList(attachments: attachments, messageId: _messageId),
+          AttachmentList(
+            key: _attachmentsKey,
+            attachments: attachments,
+            messageId: _messageId,
+          ),
         ],
       ],
+    );
+  }
+
+  void _scrollToAttachments() {
+    final targetContext = _attachmentsKey.currentContext;
+    if (targetContext == null) return;
+    Scrollable.ensureVisible(
+      targetContext,
+      duration: const Duration(milliseconds: 360),
+      curve: Curves.easeOutCubic,
+      alignment: 0.08,
     );
   }
 
@@ -995,6 +1311,40 @@ class _MessageBodyState extends ConsumerState<_MessageBody> {
       }
     }
     return true;
+  }
+}
+
+class _AttachmentJumpButton extends StatelessWidget {
+  const _AttachmentJumpButton({
+    required this.attachmentCount,
+    required this.onPressed,
+  });
+
+  final int attachmentCount;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return TextButton.icon(
+      onPressed: onPressed,
+      style: TextButton.styleFrom(
+        foregroundColor: theme.colorScheme.primary,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        minimumSize: const Size(0, 36),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        visualDensity: VisualDensity.compact,
+      ),
+      icon: const Icon(Symbols.attach_file, size: 18),
+      label: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('$attachmentCount 个附件'),
+          const SizedBox(width: 2),
+          const Icon(Symbols.keyboard_arrow_down_rounded, size: 18),
+        ],
+      ),
+    );
   }
 }
 

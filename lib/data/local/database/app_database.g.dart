@@ -1893,6 +1893,17 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _serverDraftIdMeta = const VerificationMeta(
+    'serverDraftId',
+  );
+  @override
+  late final GeneratedColumn<String> serverDraftId = GeneratedColumn<String>(
+    'server_draft_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _subjectMeta = const VerificationMeta(
     'subject',
   );
@@ -1945,6 +1956,18 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
   @override
   late final GeneratedColumn<String> ccRecipients = GeneratedColumn<String>(
     'cc_recipients',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('[]'),
+  );
+  static const VerificationMeta _bccRecipientsMeta = const VerificationMeta(
+    'bccRecipients',
+  );
+  @override
+  late final GeneratedColumn<String> bccRecipients = GeneratedColumn<String>(
+    'bcc_recipients',
     aliasedName,
     false,
     type: DriftSqlType.string,
@@ -2040,11 +2063,13 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     imapUidValidity,
     graphMessageId,
     gmailMessageId,
+    serverDraftId,
     subject,
     fromName,
     fromEmail,
     toRecipients,
     ccRecipients,
+    bccRecipients,
     date,
     preview,
     flagsBitmask,
@@ -2119,6 +2144,15 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
         ),
       );
     }
+    if (data.containsKey('server_draft_id')) {
+      context.handle(
+        _serverDraftIdMeta,
+        serverDraftId.isAcceptableOrUnknown(
+          data['server_draft_id']!,
+          _serverDraftIdMeta,
+        ),
+      );
+    }
     if (data.containsKey('subject')) {
       context.handle(
         _subjectMeta,
@@ -2152,6 +2186,15 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
         ccRecipients.isAcceptableOrUnknown(
           data['cc_recipients']!,
           _ccRecipientsMeta,
+        ),
+      );
+    }
+    if (data.containsKey('bcc_recipients')) {
+      context.handle(
+        _bccRecipientsMeta,
+        bccRecipients.isAcceptableOrUnknown(
+          data['bcc_recipients']!,
+          _bccRecipientsMeta,
         ),
       );
     }
@@ -2251,6 +2294,10 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
         DriftSqlType.string,
         data['${effectivePrefix}gmail_message_id'],
       ),
+      serverDraftId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}server_draft_id'],
+      ),
       subject: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}subject'],
@@ -2270,6 +2317,10 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
       ccRecipients: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}cc_recipients'],
+      )!,
+      bccRecipients: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}bcc_recipients'],
       )!,
       date: attachedDatabase.typeMapping.read(
         DriftSqlType.dateTime,
@@ -2325,6 +2376,9 @@ class Message extends DataClass implements Insertable<Message> {
 
   /// Gmail：REST API 的 message id（全邮箱唯一）。
   final String? gmailMessageId;
+
+  /// 服务端草稿 id：Gmail draft id / Graph draft message id。
+  final String? serverDraftId;
   final String subject;
   final String? fromName;
   final String? fromEmail;
@@ -2332,6 +2386,7 @@ class Message extends DataClass implements Insertable<Message> {
   /// 收件人/抄送，JSON 数组字符串（[{name,email}]）。
   final String toRecipients;
   final String ccRecipients;
+  final String bccRecipients;
   final DateTime date;
 
   /// 预览片段。
@@ -2357,11 +2412,13 @@ class Message extends DataClass implements Insertable<Message> {
     this.imapUidValidity,
     this.graphMessageId,
     this.gmailMessageId,
+    this.serverDraftId,
     required this.subject,
     this.fromName,
     this.fromEmail,
     required this.toRecipients,
     required this.ccRecipients,
+    required this.bccRecipients,
     required this.date,
     required this.preview,
     required this.flagsBitmask,
@@ -2388,6 +2445,9 @@ class Message extends DataClass implements Insertable<Message> {
     if (!nullToAbsent || gmailMessageId != null) {
       map['gmail_message_id'] = Variable<String>(gmailMessageId);
     }
+    if (!nullToAbsent || serverDraftId != null) {
+      map['server_draft_id'] = Variable<String>(serverDraftId);
+    }
     map['subject'] = Variable<String>(subject);
     if (!nullToAbsent || fromName != null) {
       map['from_name'] = Variable<String>(fromName);
@@ -2397,6 +2457,7 @@ class Message extends DataClass implements Insertable<Message> {
     }
     map['to_recipients'] = Variable<String>(toRecipients);
     map['cc_recipients'] = Variable<String>(ccRecipients);
+    map['bcc_recipients'] = Variable<String>(bccRecipients);
     map['date'] = Variable<DateTime>(date);
     map['preview'] = Variable<String>(preview);
     map['flags_bitmask'] = Variable<int>(flagsBitmask);
@@ -2428,6 +2489,9 @@ class Message extends DataClass implements Insertable<Message> {
       gmailMessageId: gmailMessageId == null && nullToAbsent
           ? const Value.absent()
           : Value(gmailMessageId),
+      serverDraftId: serverDraftId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(serverDraftId),
       subject: Value(subject),
       fromName: fromName == null && nullToAbsent
           ? const Value.absent()
@@ -2437,6 +2501,7 @@ class Message extends DataClass implements Insertable<Message> {
           : Value(fromEmail),
       toRecipients: Value(toRecipients),
       ccRecipients: Value(ccRecipients),
+      bccRecipients: Value(bccRecipients),
       date: Value(date),
       preview: Value(preview),
       flagsBitmask: Value(flagsBitmask),
@@ -2464,11 +2529,13 @@ class Message extends DataClass implements Insertable<Message> {
       imapUidValidity: serializer.fromJson<int?>(json['imapUidValidity']),
       graphMessageId: serializer.fromJson<String?>(json['graphMessageId']),
       gmailMessageId: serializer.fromJson<String?>(json['gmailMessageId']),
+      serverDraftId: serializer.fromJson<String?>(json['serverDraftId']),
       subject: serializer.fromJson<String>(json['subject']),
       fromName: serializer.fromJson<String?>(json['fromName']),
       fromEmail: serializer.fromJson<String?>(json['fromEmail']),
       toRecipients: serializer.fromJson<String>(json['toRecipients']),
       ccRecipients: serializer.fromJson<String>(json['ccRecipients']),
+      bccRecipients: serializer.fromJson<String>(json['bccRecipients']),
       date: serializer.fromJson<DateTime>(json['date']),
       preview: serializer.fromJson<String>(json['preview']),
       flagsBitmask: serializer.fromJson<int>(json['flagsBitmask']),
@@ -2489,11 +2556,13 @@ class Message extends DataClass implements Insertable<Message> {
       'imapUidValidity': serializer.toJson<int?>(imapUidValidity),
       'graphMessageId': serializer.toJson<String?>(graphMessageId),
       'gmailMessageId': serializer.toJson<String?>(gmailMessageId),
+      'serverDraftId': serializer.toJson<String?>(serverDraftId),
       'subject': serializer.toJson<String>(subject),
       'fromName': serializer.toJson<String?>(fromName),
       'fromEmail': serializer.toJson<String?>(fromEmail),
       'toRecipients': serializer.toJson<String>(toRecipients),
       'ccRecipients': serializer.toJson<String>(ccRecipients),
+      'bccRecipients': serializer.toJson<String>(bccRecipients),
       'date': serializer.toJson<DateTime>(date),
       'preview': serializer.toJson<String>(preview),
       'flagsBitmask': serializer.toJson<int>(flagsBitmask),
@@ -2512,11 +2581,13 @@ class Message extends DataClass implements Insertable<Message> {
     Value<int?> imapUidValidity = const Value.absent(),
     Value<String?> graphMessageId = const Value.absent(),
     Value<String?> gmailMessageId = const Value.absent(),
+    Value<String?> serverDraftId = const Value.absent(),
     String? subject,
     Value<String?> fromName = const Value.absent(),
     Value<String?> fromEmail = const Value.absent(),
     String? toRecipients,
     String? ccRecipients,
+    String? bccRecipients,
     DateTime? date,
     String? preview,
     int? flagsBitmask,
@@ -2538,11 +2609,15 @@ class Message extends DataClass implements Insertable<Message> {
     gmailMessageId: gmailMessageId.present
         ? gmailMessageId.value
         : this.gmailMessageId,
+    serverDraftId: serverDraftId.present
+        ? serverDraftId.value
+        : this.serverDraftId,
     subject: subject ?? this.subject,
     fromName: fromName.present ? fromName.value : this.fromName,
     fromEmail: fromEmail.present ? fromEmail.value : this.fromEmail,
     toRecipients: toRecipients ?? this.toRecipients,
     ccRecipients: ccRecipients ?? this.ccRecipients,
+    bccRecipients: bccRecipients ?? this.bccRecipients,
     date: date ?? this.date,
     preview: preview ?? this.preview,
     flagsBitmask: flagsBitmask ?? this.flagsBitmask,
@@ -2568,6 +2643,9 @@ class Message extends DataClass implements Insertable<Message> {
       gmailMessageId: data.gmailMessageId.present
           ? data.gmailMessageId.value
           : this.gmailMessageId,
+      serverDraftId: data.serverDraftId.present
+          ? data.serverDraftId.value
+          : this.serverDraftId,
       subject: data.subject.present ? data.subject.value : this.subject,
       fromName: data.fromName.present ? data.fromName.value : this.fromName,
       fromEmail: data.fromEmail.present ? data.fromEmail.value : this.fromEmail,
@@ -2577,6 +2655,9 @@ class Message extends DataClass implements Insertable<Message> {
       ccRecipients: data.ccRecipients.present
           ? data.ccRecipients.value
           : this.ccRecipients,
+      bccRecipients: data.bccRecipients.present
+          ? data.bccRecipients.value
+          : this.bccRecipients,
       date: data.date.present ? data.date.value : this.date,
       preview: data.preview.present ? data.preview.value : this.preview,
       flagsBitmask: data.flagsBitmask.present
@@ -2603,11 +2684,13 @@ class Message extends DataClass implements Insertable<Message> {
           ..write('imapUidValidity: $imapUidValidity, ')
           ..write('graphMessageId: $graphMessageId, ')
           ..write('gmailMessageId: $gmailMessageId, ')
+          ..write('serverDraftId: $serverDraftId, ')
           ..write('subject: $subject, ')
           ..write('fromName: $fromName, ')
           ..write('fromEmail: $fromEmail, ')
           ..write('toRecipients: $toRecipients, ')
           ..write('ccRecipients: $ccRecipients, ')
+          ..write('bccRecipients: $bccRecipients, ')
           ..write('date: $date, ')
           ..write('preview: $preview, ')
           ..write('flagsBitmask: $flagsBitmask, ')
@@ -2620,7 +2703,7 @@ class Message extends DataClass implements Insertable<Message> {
   }
 
   @override
-  int get hashCode => Object.hash(
+  int get hashCode => Object.hashAll([
     id,
     accountId,
     folderId,
@@ -2628,11 +2711,13 @@ class Message extends DataClass implements Insertable<Message> {
     imapUidValidity,
     graphMessageId,
     gmailMessageId,
+    serverDraftId,
     subject,
     fromName,
     fromEmail,
     toRecipients,
     ccRecipients,
+    bccRecipients,
     date,
     preview,
     flagsBitmask,
@@ -2640,7 +2725,7 @@ class Message extends DataClass implements Insertable<Message> {
     threadKey,
     messageIdHeader,
     labels,
-  );
+  ]);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -2652,11 +2737,13 @@ class Message extends DataClass implements Insertable<Message> {
           other.imapUidValidity == this.imapUidValidity &&
           other.graphMessageId == this.graphMessageId &&
           other.gmailMessageId == this.gmailMessageId &&
+          other.serverDraftId == this.serverDraftId &&
           other.subject == this.subject &&
           other.fromName == this.fromName &&
           other.fromEmail == this.fromEmail &&
           other.toRecipients == this.toRecipients &&
           other.ccRecipients == this.ccRecipients &&
+          other.bccRecipients == this.bccRecipients &&
           other.date == this.date &&
           other.preview == this.preview &&
           other.flagsBitmask == this.flagsBitmask &&
@@ -2674,11 +2761,13 @@ class MessagesCompanion extends UpdateCompanion<Message> {
   final Value<int?> imapUidValidity;
   final Value<String?> graphMessageId;
   final Value<String?> gmailMessageId;
+  final Value<String?> serverDraftId;
   final Value<String> subject;
   final Value<String?> fromName;
   final Value<String?> fromEmail;
   final Value<String> toRecipients;
   final Value<String> ccRecipients;
+  final Value<String> bccRecipients;
   final Value<DateTime> date;
   final Value<String> preview;
   final Value<int> flagsBitmask;
@@ -2695,11 +2784,13 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     this.imapUidValidity = const Value.absent(),
     this.graphMessageId = const Value.absent(),
     this.gmailMessageId = const Value.absent(),
+    this.serverDraftId = const Value.absent(),
     this.subject = const Value.absent(),
     this.fromName = const Value.absent(),
     this.fromEmail = const Value.absent(),
     this.toRecipients = const Value.absent(),
     this.ccRecipients = const Value.absent(),
+    this.bccRecipients = const Value.absent(),
     this.date = const Value.absent(),
     this.preview = const Value.absent(),
     this.flagsBitmask = const Value.absent(),
@@ -2717,11 +2808,13 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     this.imapUidValidity = const Value.absent(),
     this.graphMessageId = const Value.absent(),
     this.gmailMessageId = const Value.absent(),
+    this.serverDraftId = const Value.absent(),
     this.subject = const Value.absent(),
     this.fromName = const Value.absent(),
     this.fromEmail = const Value.absent(),
     this.toRecipients = const Value.absent(),
     this.ccRecipients = const Value.absent(),
+    this.bccRecipients = const Value.absent(),
     required DateTime date,
     this.preview = const Value.absent(),
     this.flagsBitmask = const Value.absent(),
@@ -2742,11 +2835,13 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Expression<int>? imapUidValidity,
     Expression<String>? graphMessageId,
     Expression<String>? gmailMessageId,
+    Expression<String>? serverDraftId,
     Expression<String>? subject,
     Expression<String>? fromName,
     Expression<String>? fromEmail,
     Expression<String>? toRecipients,
     Expression<String>? ccRecipients,
+    Expression<String>? bccRecipients,
     Expression<DateTime>? date,
     Expression<String>? preview,
     Expression<int>? flagsBitmask,
@@ -2764,11 +2859,13 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       if (imapUidValidity != null) 'imap_uid_validity': imapUidValidity,
       if (graphMessageId != null) 'graph_message_id': graphMessageId,
       if (gmailMessageId != null) 'gmail_message_id': gmailMessageId,
+      if (serverDraftId != null) 'server_draft_id': serverDraftId,
       if (subject != null) 'subject': subject,
       if (fromName != null) 'from_name': fromName,
       if (fromEmail != null) 'from_email': fromEmail,
       if (toRecipients != null) 'to_recipients': toRecipients,
       if (ccRecipients != null) 'cc_recipients': ccRecipients,
+      if (bccRecipients != null) 'bcc_recipients': bccRecipients,
       if (date != null) 'date': date,
       if (preview != null) 'preview': preview,
       if (flagsBitmask != null) 'flags_bitmask': flagsBitmask,
@@ -2788,11 +2885,13 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Value<int?>? imapUidValidity,
     Value<String?>? graphMessageId,
     Value<String?>? gmailMessageId,
+    Value<String?>? serverDraftId,
     Value<String>? subject,
     Value<String?>? fromName,
     Value<String?>? fromEmail,
     Value<String>? toRecipients,
     Value<String>? ccRecipients,
+    Value<String>? bccRecipients,
     Value<DateTime>? date,
     Value<String>? preview,
     Value<int>? flagsBitmask,
@@ -2810,11 +2909,13 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       imapUidValidity: imapUidValidity ?? this.imapUidValidity,
       graphMessageId: graphMessageId ?? this.graphMessageId,
       gmailMessageId: gmailMessageId ?? this.gmailMessageId,
+      serverDraftId: serverDraftId ?? this.serverDraftId,
       subject: subject ?? this.subject,
       fromName: fromName ?? this.fromName,
       fromEmail: fromEmail ?? this.fromEmail,
       toRecipients: toRecipients ?? this.toRecipients,
       ccRecipients: ccRecipients ?? this.ccRecipients,
+      bccRecipients: bccRecipients ?? this.bccRecipients,
       date: date ?? this.date,
       preview: preview ?? this.preview,
       flagsBitmask: flagsBitmask ?? this.flagsBitmask,
@@ -2850,6 +2951,9 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     if (gmailMessageId.present) {
       map['gmail_message_id'] = Variable<String>(gmailMessageId.value);
     }
+    if (serverDraftId.present) {
+      map['server_draft_id'] = Variable<String>(serverDraftId.value);
+    }
     if (subject.present) {
       map['subject'] = Variable<String>(subject.value);
     }
@@ -2864,6 +2968,9 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     }
     if (ccRecipients.present) {
       map['cc_recipients'] = Variable<String>(ccRecipients.value);
+    }
+    if (bccRecipients.present) {
+      map['bcc_recipients'] = Variable<String>(bccRecipients.value);
     }
     if (date.present) {
       map['date'] = Variable<DateTime>(date.value);
@@ -2902,11 +3009,13 @@ class MessagesCompanion extends UpdateCompanion<Message> {
           ..write('imapUidValidity: $imapUidValidity, ')
           ..write('graphMessageId: $graphMessageId, ')
           ..write('gmailMessageId: $gmailMessageId, ')
+          ..write('serverDraftId: $serverDraftId, ')
           ..write('subject: $subject, ')
           ..write('fromName: $fromName, ')
           ..write('fromEmail: $fromEmail, ')
           ..write('toRecipients: $toRecipients, ')
           ..write('ccRecipients: $ccRecipients, ')
+          ..write('bccRecipients: $bccRecipients, ')
           ..write('date: $date, ')
           ..write('preview: $preview, ')
           ..write('flagsBitmask: $flagsBitmask, ')
@@ -4386,6 +4495,1327 @@ class OutboxOpsCompanion extends UpdateCompanion<OutboxOp> {
   }
 }
 
+class $SendTasksTable extends SendTasks
+    with TableInfo<$SendTasksTable, SendTask> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $SendTasksTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _accountIdMeta = const VerificationMeta(
+    'accountId',
+  );
+  @override
+  late final GeneratedColumn<String> accountId = GeneratedColumn<String>(
+    'account_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES accounts (id) ON DELETE CASCADE',
+    ),
+  );
+  static const VerificationMeta _payloadMeta = const VerificationMeta(
+    'payload',
+  );
+  @override
+  late final GeneratedColumn<String> payload = GeneratedColumn<String>(
+    'payload',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  @override
+  late final GeneratedColumnWithTypeConverter<SendTaskStatus, int> status =
+      GeneratedColumn<int>(
+        'status',
+        aliasedName,
+        false,
+        type: DriftSqlType.int,
+        requiredDuringInsert: false,
+        defaultValue: Constant(SendTaskStatus.queued.index),
+      ).withConverter<SendTaskStatus>($SendTasksTable.$converterstatus);
+  static const VerificationMeta _attemptsMeta = const VerificationMeta(
+    'attempts',
+  );
+  @override
+  late final GeneratedColumn<int> attempts = GeneratedColumn<int>(
+    'attempts',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  static const VerificationMeta _lastErrorMeta = const VerificationMeta(
+    'lastError',
+  );
+  @override
+  late final GeneratedColumn<String> lastError = GeneratedColumn<String>(
+    'last_error',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _draftMessageIdMeta = const VerificationMeta(
+    'draftMessageId',
+  );
+  @override
+  late final GeneratedColumn<String> draftMessageId = GeneratedColumn<String>(
+    'draft_message_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+    defaultValue: currentDateAndTime,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+    defaultValue: currentDateAndTime,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    accountId,
+    payload,
+    status,
+    attempts,
+    lastError,
+    draftMessageId,
+    createdAt,
+    updatedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'send_tasks';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<SendTask> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('account_id')) {
+      context.handle(
+        _accountIdMeta,
+        accountId.isAcceptableOrUnknown(data['account_id']!, _accountIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_accountIdMeta);
+    }
+    if (data.containsKey('payload')) {
+      context.handle(
+        _payloadMeta,
+        payload.isAcceptableOrUnknown(data['payload']!, _payloadMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_payloadMeta);
+    }
+    if (data.containsKey('attempts')) {
+      context.handle(
+        _attemptsMeta,
+        attempts.isAcceptableOrUnknown(data['attempts']!, _attemptsMeta),
+      );
+    }
+    if (data.containsKey('last_error')) {
+      context.handle(
+        _lastErrorMeta,
+        lastError.isAcceptableOrUnknown(data['last_error']!, _lastErrorMeta),
+      );
+    }
+    if (data.containsKey('draft_message_id')) {
+      context.handle(
+        _draftMessageIdMeta,
+        draftMessageId.isAcceptableOrUnknown(
+          data['draft_message_id']!,
+          _draftMessageIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  SendTask map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return SendTask(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      accountId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}account_id'],
+      )!,
+      payload: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}payload'],
+      )!,
+      status: $SendTasksTable.$converterstatus.fromSql(
+        attachedDatabase.typeMapping.read(
+          DriftSqlType.int,
+          data['${effectivePrefix}status'],
+        )!,
+      ),
+      attempts: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}attempts'],
+      )!,
+      lastError: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}last_error'],
+      ),
+      draftMessageId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}draft_message_id'],
+      ),
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}created_at'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}updated_at'],
+      )!,
+    );
+  }
+
+  @override
+  $SendTasksTable createAlias(String alias) {
+    return $SendTasksTable(attachedDatabase, alias);
+  }
+
+  static JsonTypeConverter2<SendTaskStatus, int, int> $converterstatus =
+      const EnumIndexConverter<SendTaskStatus>(SendTaskStatus.values);
+}
+
+class SendTask extends DataClass implements Insertable<SendTask> {
+  /// 内部稳定主键（UUID）。
+  final String id;
+  final String accountId;
+
+  /// 序列化的 OutgoingMessage（JSON）。
+  final String payload;
+
+  /// 任务状态（queued / sending / failed）。
+  final SendTaskStatus status;
+
+  /// 已尝试次数。
+  final int attempts;
+  final String? lastError;
+
+  /// 关联的本地草稿邮件 id（若由草稿发送），发送成功后一并删除。
+  final String? draftMessageId;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+  const SendTask({
+    required this.id,
+    required this.accountId,
+    required this.payload,
+    required this.status,
+    required this.attempts,
+    this.lastError,
+    this.draftMessageId,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['account_id'] = Variable<String>(accountId);
+    map['payload'] = Variable<String>(payload);
+    {
+      map['status'] = Variable<int>(
+        $SendTasksTable.$converterstatus.toSql(status),
+      );
+    }
+    map['attempts'] = Variable<int>(attempts);
+    if (!nullToAbsent || lastError != null) {
+      map['last_error'] = Variable<String>(lastError);
+    }
+    if (!nullToAbsent || draftMessageId != null) {
+      map['draft_message_id'] = Variable<String>(draftMessageId);
+    }
+    map['created_at'] = Variable<DateTime>(createdAt);
+    map['updated_at'] = Variable<DateTime>(updatedAt);
+    return map;
+  }
+
+  SendTasksCompanion toCompanion(bool nullToAbsent) {
+    return SendTasksCompanion(
+      id: Value(id),
+      accountId: Value(accountId),
+      payload: Value(payload),
+      status: Value(status),
+      attempts: Value(attempts),
+      lastError: lastError == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastError),
+      draftMessageId: draftMessageId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(draftMessageId),
+      createdAt: Value(createdAt),
+      updatedAt: Value(updatedAt),
+    );
+  }
+
+  factory SendTask.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return SendTask(
+      id: serializer.fromJson<String>(json['id']),
+      accountId: serializer.fromJson<String>(json['accountId']),
+      payload: serializer.fromJson<String>(json['payload']),
+      status: $SendTasksTable.$converterstatus.fromJson(
+        serializer.fromJson<int>(json['status']),
+      ),
+      attempts: serializer.fromJson<int>(json['attempts']),
+      lastError: serializer.fromJson<String?>(json['lastError']),
+      draftMessageId: serializer.fromJson<String?>(json['draftMessageId']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'accountId': serializer.toJson<String>(accountId),
+      'payload': serializer.toJson<String>(payload),
+      'status': serializer.toJson<int>(
+        $SendTasksTable.$converterstatus.toJson(status),
+      ),
+      'attempts': serializer.toJson<int>(attempts),
+      'lastError': serializer.toJson<String?>(lastError),
+      'draftMessageId': serializer.toJson<String?>(draftMessageId),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+      'updatedAt': serializer.toJson<DateTime>(updatedAt),
+    };
+  }
+
+  SendTask copyWith({
+    String? id,
+    String? accountId,
+    String? payload,
+    SendTaskStatus? status,
+    int? attempts,
+    Value<String?> lastError = const Value.absent(),
+    Value<String?> draftMessageId = const Value.absent(),
+    DateTime? createdAt,
+    DateTime? updatedAt,
+  }) => SendTask(
+    id: id ?? this.id,
+    accountId: accountId ?? this.accountId,
+    payload: payload ?? this.payload,
+    status: status ?? this.status,
+    attempts: attempts ?? this.attempts,
+    lastError: lastError.present ? lastError.value : this.lastError,
+    draftMessageId: draftMessageId.present
+        ? draftMessageId.value
+        : this.draftMessageId,
+    createdAt: createdAt ?? this.createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
+  SendTask copyWithCompanion(SendTasksCompanion data) {
+    return SendTask(
+      id: data.id.present ? data.id.value : this.id,
+      accountId: data.accountId.present ? data.accountId.value : this.accountId,
+      payload: data.payload.present ? data.payload.value : this.payload,
+      status: data.status.present ? data.status.value : this.status,
+      attempts: data.attempts.present ? data.attempts.value : this.attempts,
+      lastError: data.lastError.present ? data.lastError.value : this.lastError,
+      draftMessageId: data.draftMessageId.present
+          ? data.draftMessageId.value
+          : this.draftMessageId,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SendTask(')
+          ..write('id: $id, ')
+          ..write('accountId: $accountId, ')
+          ..write('payload: $payload, ')
+          ..write('status: $status, ')
+          ..write('attempts: $attempts, ')
+          ..write('lastError: $lastError, ')
+          ..write('draftMessageId: $draftMessageId, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    accountId,
+    payload,
+    status,
+    attempts,
+    lastError,
+    draftMessageId,
+    createdAt,
+    updatedAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is SendTask &&
+          other.id == this.id &&
+          other.accountId == this.accountId &&
+          other.payload == this.payload &&
+          other.status == this.status &&
+          other.attempts == this.attempts &&
+          other.lastError == this.lastError &&
+          other.draftMessageId == this.draftMessageId &&
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt);
+}
+
+class SendTasksCompanion extends UpdateCompanion<SendTask> {
+  final Value<String> id;
+  final Value<String> accountId;
+  final Value<String> payload;
+  final Value<SendTaskStatus> status;
+  final Value<int> attempts;
+  final Value<String?> lastError;
+  final Value<String?> draftMessageId;
+  final Value<DateTime> createdAt;
+  final Value<DateTime> updatedAt;
+  final Value<int> rowid;
+  const SendTasksCompanion({
+    this.id = const Value.absent(),
+    this.accountId = const Value.absent(),
+    this.payload = const Value.absent(),
+    this.status = const Value.absent(),
+    this.attempts = const Value.absent(),
+    this.lastError = const Value.absent(),
+    this.draftMessageId = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  SendTasksCompanion.insert({
+    required String id,
+    required String accountId,
+    required String payload,
+    this.status = const Value.absent(),
+    this.attempts = const Value.absent(),
+    this.lastError = const Value.absent(),
+    this.draftMessageId = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       accountId = Value(accountId),
+       payload = Value(payload);
+  static Insertable<SendTask> custom({
+    Expression<String>? id,
+    Expression<String>? accountId,
+    Expression<String>? payload,
+    Expression<int>? status,
+    Expression<int>? attempts,
+    Expression<String>? lastError,
+    Expression<String>? draftMessageId,
+    Expression<DateTime>? createdAt,
+    Expression<DateTime>? updatedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (accountId != null) 'account_id': accountId,
+      if (payload != null) 'payload': payload,
+      if (status != null) 'status': status,
+      if (attempts != null) 'attempts': attempts,
+      if (lastError != null) 'last_error': lastError,
+      if (draftMessageId != null) 'draft_message_id': draftMessageId,
+      if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  SendTasksCompanion copyWith({
+    Value<String>? id,
+    Value<String>? accountId,
+    Value<String>? payload,
+    Value<SendTaskStatus>? status,
+    Value<int>? attempts,
+    Value<String?>? lastError,
+    Value<String?>? draftMessageId,
+    Value<DateTime>? createdAt,
+    Value<DateTime>? updatedAt,
+    Value<int>? rowid,
+  }) {
+    return SendTasksCompanion(
+      id: id ?? this.id,
+      accountId: accountId ?? this.accountId,
+      payload: payload ?? this.payload,
+      status: status ?? this.status,
+      attempts: attempts ?? this.attempts,
+      lastError: lastError ?? this.lastError,
+      draftMessageId: draftMessageId ?? this.draftMessageId,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (accountId.present) {
+      map['account_id'] = Variable<String>(accountId.value);
+    }
+    if (payload.present) {
+      map['payload'] = Variable<String>(payload.value);
+    }
+    if (status.present) {
+      map['status'] = Variable<int>(
+        $SendTasksTable.$converterstatus.toSql(status.value),
+      );
+    }
+    if (attempts.present) {
+      map['attempts'] = Variable<int>(attempts.value);
+    }
+    if (lastError.present) {
+      map['last_error'] = Variable<String>(lastError.value);
+    }
+    if (draftMessageId.present) {
+      map['draft_message_id'] = Variable<String>(draftMessageId.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SendTasksCompanion(')
+          ..write('id: $id, ')
+          ..write('accountId: $accountId, ')
+          ..write('payload: $payload, ')
+          ..write('status: $status, ')
+          ..write('attempts: $attempts, ')
+          ..write('lastError: $lastError, ')
+          ..write('draftMessageId: $draftMessageId, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $DraftSyncTasksTable extends DraftSyncTasks
+    with TableInfo<$DraftSyncTasksTable, DraftSyncTask> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $DraftSyncTasksTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _accountIdMeta = const VerificationMeta(
+    'accountId',
+  );
+  @override
+  late final GeneratedColumn<String> accountId = GeneratedColumn<String>(
+    'account_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES accounts (id) ON DELETE CASCADE',
+    ),
+  );
+  static const VerificationMeta _opTypeMeta = const VerificationMeta('opType');
+  @override
+  late final GeneratedColumn<String> opType = GeneratedColumn<String>(
+    'op_type',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _draftMessageIdMeta = const VerificationMeta(
+    'draftMessageId',
+  );
+  @override
+  late final GeneratedColumn<String> draftMessageId = GeneratedColumn<String>(
+    'draft_message_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _payloadMeta = const VerificationMeta(
+    'payload',
+  );
+  @override
+  late final GeneratedColumn<String> payload = GeneratedColumn<String>(
+    'payload',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _serverDraftIdMeta = const VerificationMeta(
+    'serverDraftId',
+  );
+  @override
+  late final GeneratedColumn<String> serverDraftId = GeneratedColumn<String>(
+    'server_draft_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  @override
+  late final GeneratedColumnWithTypeConverter<DraftSyncTaskStatus, int> status =
+      GeneratedColumn<int>(
+        'status',
+        aliasedName,
+        false,
+        type: DriftSqlType.int,
+        requiredDuringInsert: false,
+        defaultValue: Constant(DraftSyncTaskStatus.queued.index),
+      ).withConverter<DraftSyncTaskStatus>(
+        $DraftSyncTasksTable.$converterstatus,
+      );
+  static const VerificationMeta _attemptsMeta = const VerificationMeta(
+    'attempts',
+  );
+  @override
+  late final GeneratedColumn<int> attempts = GeneratedColumn<int>(
+    'attempts',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  static const VerificationMeta _lastErrorMeta = const VerificationMeta(
+    'lastError',
+  );
+  @override
+  late final GeneratedColumn<String> lastError = GeneratedColumn<String>(
+    'last_error',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _nextAttemptAtMeta = const VerificationMeta(
+    'nextAttemptAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> nextAttemptAt =
+      GeneratedColumn<DateTime>(
+        'next_attempt_at',
+        aliasedName,
+        true,
+        type: DriftSqlType.dateTime,
+        requiredDuringInsert: false,
+      );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+    defaultValue: currentDateAndTime,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+    defaultValue: currentDateAndTime,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    accountId,
+    opType,
+    draftMessageId,
+    payload,
+    serverDraftId,
+    status,
+    attempts,
+    lastError,
+    nextAttemptAt,
+    createdAt,
+    updatedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'draft_sync_tasks';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<DraftSyncTask> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('account_id')) {
+      context.handle(
+        _accountIdMeta,
+        accountId.isAcceptableOrUnknown(data['account_id']!, _accountIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_accountIdMeta);
+    }
+    if (data.containsKey('op_type')) {
+      context.handle(
+        _opTypeMeta,
+        opType.isAcceptableOrUnknown(data['op_type']!, _opTypeMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_opTypeMeta);
+    }
+    if (data.containsKey('draft_message_id')) {
+      context.handle(
+        _draftMessageIdMeta,
+        draftMessageId.isAcceptableOrUnknown(
+          data['draft_message_id']!,
+          _draftMessageIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('payload')) {
+      context.handle(
+        _payloadMeta,
+        payload.isAcceptableOrUnknown(data['payload']!, _payloadMeta),
+      );
+    }
+    if (data.containsKey('server_draft_id')) {
+      context.handle(
+        _serverDraftIdMeta,
+        serverDraftId.isAcceptableOrUnknown(
+          data['server_draft_id']!,
+          _serverDraftIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('attempts')) {
+      context.handle(
+        _attemptsMeta,
+        attempts.isAcceptableOrUnknown(data['attempts']!, _attemptsMeta),
+      );
+    }
+    if (data.containsKey('last_error')) {
+      context.handle(
+        _lastErrorMeta,
+        lastError.isAcceptableOrUnknown(data['last_error']!, _lastErrorMeta),
+      );
+    }
+    if (data.containsKey('next_attempt_at')) {
+      context.handle(
+        _nextAttemptAtMeta,
+        nextAttemptAt.isAcceptableOrUnknown(
+          data['next_attempt_at']!,
+          _nextAttemptAtMeta,
+        ),
+      );
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  DraftSyncTask map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return DraftSyncTask(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      accountId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}account_id'],
+      )!,
+      opType: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}op_type'],
+      )!,
+      draftMessageId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}draft_message_id'],
+      ),
+      payload: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}payload'],
+      ),
+      serverDraftId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}server_draft_id'],
+      ),
+      status: $DraftSyncTasksTable.$converterstatus.fromSql(
+        attachedDatabase.typeMapping.read(
+          DriftSqlType.int,
+          data['${effectivePrefix}status'],
+        )!,
+      ),
+      attempts: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}attempts'],
+      )!,
+      lastError: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}last_error'],
+      ),
+      nextAttemptAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}next_attempt_at'],
+      ),
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}created_at'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}updated_at'],
+      )!,
+    );
+  }
+
+  @override
+  $DraftSyncTasksTable createAlias(String alias) {
+    return $DraftSyncTasksTable(attachedDatabase, alias);
+  }
+
+  static JsonTypeConverter2<DraftSyncTaskStatus, int, int> $converterstatus =
+      const EnumIndexConverter<DraftSyncTaskStatus>(DraftSyncTaskStatus.values);
+}
+
+class DraftSyncTask extends DataClass implements Insertable<DraftSyncTask> {
+  final String id;
+  final String accountId;
+
+  /// save / delete。
+  final String opType;
+
+  /// 关联本地草稿 id。删除任务可能为空（只清理服务端草稿）。
+  final String? draftMessageId;
+
+  /// 序列化的 OutgoingMessage（save 任务使用）。
+  final String? payload;
+
+  /// 服务端草稿 id（delete 任务使用；save 任务用于覆盖旧草稿）。
+  final String? serverDraftId;
+  final DraftSyncTaskStatus status;
+  final int attempts;
+  final String? lastError;
+  final DateTime? nextAttemptAt;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+  const DraftSyncTask({
+    required this.id,
+    required this.accountId,
+    required this.opType,
+    this.draftMessageId,
+    this.payload,
+    this.serverDraftId,
+    required this.status,
+    required this.attempts,
+    this.lastError,
+    this.nextAttemptAt,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['account_id'] = Variable<String>(accountId);
+    map['op_type'] = Variable<String>(opType);
+    if (!nullToAbsent || draftMessageId != null) {
+      map['draft_message_id'] = Variable<String>(draftMessageId);
+    }
+    if (!nullToAbsent || payload != null) {
+      map['payload'] = Variable<String>(payload);
+    }
+    if (!nullToAbsent || serverDraftId != null) {
+      map['server_draft_id'] = Variable<String>(serverDraftId);
+    }
+    {
+      map['status'] = Variable<int>(
+        $DraftSyncTasksTable.$converterstatus.toSql(status),
+      );
+    }
+    map['attempts'] = Variable<int>(attempts);
+    if (!nullToAbsent || lastError != null) {
+      map['last_error'] = Variable<String>(lastError);
+    }
+    if (!nullToAbsent || nextAttemptAt != null) {
+      map['next_attempt_at'] = Variable<DateTime>(nextAttemptAt);
+    }
+    map['created_at'] = Variable<DateTime>(createdAt);
+    map['updated_at'] = Variable<DateTime>(updatedAt);
+    return map;
+  }
+
+  DraftSyncTasksCompanion toCompanion(bool nullToAbsent) {
+    return DraftSyncTasksCompanion(
+      id: Value(id),
+      accountId: Value(accountId),
+      opType: Value(opType),
+      draftMessageId: draftMessageId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(draftMessageId),
+      payload: payload == null && nullToAbsent
+          ? const Value.absent()
+          : Value(payload),
+      serverDraftId: serverDraftId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(serverDraftId),
+      status: Value(status),
+      attempts: Value(attempts),
+      lastError: lastError == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastError),
+      nextAttemptAt: nextAttemptAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(nextAttemptAt),
+      createdAt: Value(createdAt),
+      updatedAt: Value(updatedAt),
+    );
+  }
+
+  factory DraftSyncTask.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return DraftSyncTask(
+      id: serializer.fromJson<String>(json['id']),
+      accountId: serializer.fromJson<String>(json['accountId']),
+      opType: serializer.fromJson<String>(json['opType']),
+      draftMessageId: serializer.fromJson<String?>(json['draftMessageId']),
+      payload: serializer.fromJson<String?>(json['payload']),
+      serverDraftId: serializer.fromJson<String?>(json['serverDraftId']),
+      status: $DraftSyncTasksTable.$converterstatus.fromJson(
+        serializer.fromJson<int>(json['status']),
+      ),
+      attempts: serializer.fromJson<int>(json['attempts']),
+      lastError: serializer.fromJson<String?>(json['lastError']),
+      nextAttemptAt: serializer.fromJson<DateTime?>(json['nextAttemptAt']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'accountId': serializer.toJson<String>(accountId),
+      'opType': serializer.toJson<String>(opType),
+      'draftMessageId': serializer.toJson<String?>(draftMessageId),
+      'payload': serializer.toJson<String?>(payload),
+      'serverDraftId': serializer.toJson<String?>(serverDraftId),
+      'status': serializer.toJson<int>(
+        $DraftSyncTasksTable.$converterstatus.toJson(status),
+      ),
+      'attempts': serializer.toJson<int>(attempts),
+      'lastError': serializer.toJson<String?>(lastError),
+      'nextAttemptAt': serializer.toJson<DateTime?>(nextAttemptAt),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+      'updatedAt': serializer.toJson<DateTime>(updatedAt),
+    };
+  }
+
+  DraftSyncTask copyWith({
+    String? id,
+    String? accountId,
+    String? opType,
+    Value<String?> draftMessageId = const Value.absent(),
+    Value<String?> payload = const Value.absent(),
+    Value<String?> serverDraftId = const Value.absent(),
+    DraftSyncTaskStatus? status,
+    int? attempts,
+    Value<String?> lastError = const Value.absent(),
+    Value<DateTime?> nextAttemptAt = const Value.absent(),
+    DateTime? createdAt,
+    DateTime? updatedAt,
+  }) => DraftSyncTask(
+    id: id ?? this.id,
+    accountId: accountId ?? this.accountId,
+    opType: opType ?? this.opType,
+    draftMessageId: draftMessageId.present
+        ? draftMessageId.value
+        : this.draftMessageId,
+    payload: payload.present ? payload.value : this.payload,
+    serverDraftId: serverDraftId.present
+        ? serverDraftId.value
+        : this.serverDraftId,
+    status: status ?? this.status,
+    attempts: attempts ?? this.attempts,
+    lastError: lastError.present ? lastError.value : this.lastError,
+    nextAttemptAt: nextAttemptAt.present
+        ? nextAttemptAt.value
+        : this.nextAttemptAt,
+    createdAt: createdAt ?? this.createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
+  DraftSyncTask copyWithCompanion(DraftSyncTasksCompanion data) {
+    return DraftSyncTask(
+      id: data.id.present ? data.id.value : this.id,
+      accountId: data.accountId.present ? data.accountId.value : this.accountId,
+      opType: data.opType.present ? data.opType.value : this.opType,
+      draftMessageId: data.draftMessageId.present
+          ? data.draftMessageId.value
+          : this.draftMessageId,
+      payload: data.payload.present ? data.payload.value : this.payload,
+      serverDraftId: data.serverDraftId.present
+          ? data.serverDraftId.value
+          : this.serverDraftId,
+      status: data.status.present ? data.status.value : this.status,
+      attempts: data.attempts.present ? data.attempts.value : this.attempts,
+      lastError: data.lastError.present ? data.lastError.value : this.lastError,
+      nextAttemptAt: data.nextAttemptAt.present
+          ? data.nextAttemptAt.value
+          : this.nextAttemptAt,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('DraftSyncTask(')
+          ..write('id: $id, ')
+          ..write('accountId: $accountId, ')
+          ..write('opType: $opType, ')
+          ..write('draftMessageId: $draftMessageId, ')
+          ..write('payload: $payload, ')
+          ..write('serverDraftId: $serverDraftId, ')
+          ..write('status: $status, ')
+          ..write('attempts: $attempts, ')
+          ..write('lastError: $lastError, ')
+          ..write('nextAttemptAt: $nextAttemptAt, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    accountId,
+    opType,
+    draftMessageId,
+    payload,
+    serverDraftId,
+    status,
+    attempts,
+    lastError,
+    nextAttemptAt,
+    createdAt,
+    updatedAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is DraftSyncTask &&
+          other.id == this.id &&
+          other.accountId == this.accountId &&
+          other.opType == this.opType &&
+          other.draftMessageId == this.draftMessageId &&
+          other.payload == this.payload &&
+          other.serverDraftId == this.serverDraftId &&
+          other.status == this.status &&
+          other.attempts == this.attempts &&
+          other.lastError == this.lastError &&
+          other.nextAttemptAt == this.nextAttemptAt &&
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt);
+}
+
+class DraftSyncTasksCompanion extends UpdateCompanion<DraftSyncTask> {
+  final Value<String> id;
+  final Value<String> accountId;
+  final Value<String> opType;
+  final Value<String?> draftMessageId;
+  final Value<String?> payload;
+  final Value<String?> serverDraftId;
+  final Value<DraftSyncTaskStatus> status;
+  final Value<int> attempts;
+  final Value<String?> lastError;
+  final Value<DateTime?> nextAttemptAt;
+  final Value<DateTime> createdAt;
+  final Value<DateTime> updatedAt;
+  final Value<int> rowid;
+  const DraftSyncTasksCompanion({
+    this.id = const Value.absent(),
+    this.accountId = const Value.absent(),
+    this.opType = const Value.absent(),
+    this.draftMessageId = const Value.absent(),
+    this.payload = const Value.absent(),
+    this.serverDraftId = const Value.absent(),
+    this.status = const Value.absent(),
+    this.attempts = const Value.absent(),
+    this.lastError = const Value.absent(),
+    this.nextAttemptAt = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  DraftSyncTasksCompanion.insert({
+    required String id,
+    required String accountId,
+    required String opType,
+    this.draftMessageId = const Value.absent(),
+    this.payload = const Value.absent(),
+    this.serverDraftId = const Value.absent(),
+    this.status = const Value.absent(),
+    this.attempts = const Value.absent(),
+    this.lastError = const Value.absent(),
+    this.nextAttemptAt = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       accountId = Value(accountId),
+       opType = Value(opType);
+  static Insertable<DraftSyncTask> custom({
+    Expression<String>? id,
+    Expression<String>? accountId,
+    Expression<String>? opType,
+    Expression<String>? draftMessageId,
+    Expression<String>? payload,
+    Expression<String>? serverDraftId,
+    Expression<int>? status,
+    Expression<int>? attempts,
+    Expression<String>? lastError,
+    Expression<DateTime>? nextAttemptAt,
+    Expression<DateTime>? createdAt,
+    Expression<DateTime>? updatedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (accountId != null) 'account_id': accountId,
+      if (opType != null) 'op_type': opType,
+      if (draftMessageId != null) 'draft_message_id': draftMessageId,
+      if (payload != null) 'payload': payload,
+      if (serverDraftId != null) 'server_draft_id': serverDraftId,
+      if (status != null) 'status': status,
+      if (attempts != null) 'attempts': attempts,
+      if (lastError != null) 'last_error': lastError,
+      if (nextAttemptAt != null) 'next_attempt_at': nextAttemptAt,
+      if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  DraftSyncTasksCompanion copyWith({
+    Value<String>? id,
+    Value<String>? accountId,
+    Value<String>? opType,
+    Value<String?>? draftMessageId,
+    Value<String?>? payload,
+    Value<String?>? serverDraftId,
+    Value<DraftSyncTaskStatus>? status,
+    Value<int>? attempts,
+    Value<String?>? lastError,
+    Value<DateTime?>? nextAttemptAt,
+    Value<DateTime>? createdAt,
+    Value<DateTime>? updatedAt,
+    Value<int>? rowid,
+  }) {
+    return DraftSyncTasksCompanion(
+      id: id ?? this.id,
+      accountId: accountId ?? this.accountId,
+      opType: opType ?? this.opType,
+      draftMessageId: draftMessageId ?? this.draftMessageId,
+      payload: payload ?? this.payload,
+      serverDraftId: serverDraftId ?? this.serverDraftId,
+      status: status ?? this.status,
+      attempts: attempts ?? this.attempts,
+      lastError: lastError ?? this.lastError,
+      nextAttemptAt: nextAttemptAt ?? this.nextAttemptAt,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (accountId.present) {
+      map['account_id'] = Variable<String>(accountId.value);
+    }
+    if (opType.present) {
+      map['op_type'] = Variable<String>(opType.value);
+    }
+    if (draftMessageId.present) {
+      map['draft_message_id'] = Variable<String>(draftMessageId.value);
+    }
+    if (payload.present) {
+      map['payload'] = Variable<String>(payload.value);
+    }
+    if (serverDraftId.present) {
+      map['server_draft_id'] = Variable<String>(serverDraftId.value);
+    }
+    if (status.present) {
+      map['status'] = Variable<int>(
+        $DraftSyncTasksTable.$converterstatus.toSql(status.value),
+      );
+    }
+    if (attempts.present) {
+      map['attempts'] = Variable<int>(attempts.value);
+    }
+    if (lastError.present) {
+      map['last_error'] = Variable<String>(lastError.value);
+    }
+    if (nextAttemptAt.present) {
+      map['next_attempt_at'] = Variable<DateTime>(nextAttemptAt.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('DraftSyncTasksCompanion(')
+          ..write('id: $id, ')
+          ..write('accountId: $accountId, ')
+          ..write('opType: $opType, ')
+          ..write('draftMessageId: $draftMessageId, ')
+          ..write('payload: $payload, ')
+          ..write('serverDraftId: $serverDraftId, ')
+          ..write('status: $status, ')
+          ..write('attempts: $attempts, ')
+          ..write('lastError: $lastError, ')
+          ..write('nextAttemptAt: $nextAttemptAt, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -4395,10 +5825,16 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $MessageBodiesTable messageBodies = $MessageBodiesTable(this);
   late final $SyncStatesTable syncStates = $SyncStatesTable(this);
   late final $OutboxOpsTable outboxOps = $OutboxOpsTable(this);
+  late final $SendTasksTable sendTasks = $SendTasksTable(this);
+  late final $DraftSyncTasksTable draftSyncTasks = $DraftSyncTasksTable(this);
   late final AccountDao accountDao = AccountDao(this as AppDatabase);
   late final FolderDao folderDao = FolderDao(this as AppDatabase);
   late final MessageDao messageDao = MessageDao(this as AppDatabase);
   late final OutboxDao outboxDao = OutboxDao(this as AppDatabase);
+  late final SendTaskDao sendTaskDao = SendTaskDao(this as AppDatabase);
+  late final DraftSyncTaskDao draftSyncTaskDao = DraftSyncTaskDao(
+    this as AppDatabase,
+  );
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -4410,6 +5846,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     messageBodies,
     syncStates,
     outboxOps,
+    sendTasks,
+    draftSyncTasks,
   ];
   @override
   StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules([
@@ -4454,6 +5892,20 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         limitUpdateKind: UpdateKind.delete,
       ),
       result: [TableUpdate('outbox_ops', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'accounts',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('send_tasks', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'accounts',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('draft_sync_tasks', kind: UpdateKind.delete)],
     ),
   ]);
 }
@@ -4507,7 +5959,7 @@ final class $$AccountsTableReferences
     _$AppDatabase db,
   ) => MultiTypedResultKey.fromTable(
     db.folders,
-    aliasName: $_aliasNameGenerator(db.accounts.id, db.folders.accountId),
+    aliasName: 'accounts__id__folders__account_id',
   );
 
   $$FoldersTableProcessedTableManager get foldersRefs {
@@ -4526,7 +5978,7 @@ final class $$AccountsTableReferences
     _$AppDatabase db,
   ) => MultiTypedResultKey.fromTable(
     db.messages,
-    aliasName: $_aliasNameGenerator(db.accounts.id, db.messages.accountId),
+    aliasName: 'accounts__id__messages__account_id',
   );
 
   $$MessagesTableProcessedTableManager get messagesRefs {
@@ -4544,7 +5996,7 @@ final class $$AccountsTableReferences
   static MultiTypedResultKey<$OutboxOpsTable, List<OutboxOp>>
   _outboxOpsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.outboxOps,
-    aliasName: $_aliasNameGenerator(db.accounts.id, db.outboxOps.accountId),
+    aliasName: 'accounts__id__outbox_ops__account_id',
   );
 
   $$OutboxOpsTableProcessedTableManager get outboxOpsRefs {
@@ -4554,6 +6006,42 @@ final class $$AccountsTableReferences
     ).filter((f) => f.accountId.id.sqlEquals($_itemColumn<String>('id')!));
 
     final cache = $_typedResult.readTableOrNull(_outboxOpsRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+
+  static MultiTypedResultKey<$SendTasksTable, List<SendTask>>
+  _sendTasksRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
+    db.sendTasks,
+    aliasName: 'accounts__id__send_tasks__account_id',
+  );
+
+  $$SendTasksTableProcessedTableManager get sendTasksRefs {
+    final manager = $$SendTasksTableTableManager(
+      $_db,
+      $_db.sendTasks,
+    ).filter((f) => f.accountId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_sendTasksRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+
+  static MultiTypedResultKey<$DraftSyncTasksTable, List<DraftSyncTask>>
+  _draftSyncTasksRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
+    db.draftSyncTasks,
+    aliasName: 'accounts__id__draft_sync_tasks__account_id',
+  );
+
+  $$DraftSyncTasksTableProcessedTableManager get draftSyncTasksRefs {
+    final manager = $$DraftSyncTasksTableTableManager(
+      $_db,
+      $_db.draftSyncTasks,
+    ).filter((f) => f.accountId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_draftSyncTasksRefsTable($_db));
     return ProcessedTableManager(
       manager.$state.copyWith(prefetchedData: cache),
     );
@@ -4719,6 +6207,56 @@ class $$AccountsTableFilterComposer
           }) => $$OutboxOpsTableFilterComposer(
             $db: $db,
             $table: $db.outboxOps,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<bool> sendTasksRefs(
+    Expression<bool> Function($$SendTasksTableFilterComposer f) f,
+  ) {
+    final $$SendTasksTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.sendTasks,
+      getReferencedColumn: (t) => t.accountId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$SendTasksTableFilterComposer(
+            $db: $db,
+            $table: $db.sendTasks,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<bool> draftSyncTasksRefs(
+    Expression<bool> Function($$DraftSyncTasksTableFilterComposer f) f,
+  ) {
+    final $$DraftSyncTasksTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.draftSyncTasks,
+      getReferencedColumn: (t) => t.accountId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$DraftSyncTasksTableFilterComposer(
+            $db: $db,
+            $table: $db.draftSyncTasks,
             $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
             joinBuilder: joinBuilder,
             $removeJoinBuilderFromRootComposer:
@@ -4963,6 +6501,56 @@ class $$AccountsTableAnnotationComposer
     );
     return f(composer);
   }
+
+  Expression<T> sendTasksRefs<T extends Object>(
+    Expression<T> Function($$SendTasksTableAnnotationComposer a) f,
+  ) {
+    final $$SendTasksTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.sendTasks,
+      getReferencedColumn: (t) => t.accountId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$SendTasksTableAnnotationComposer(
+            $db: $db,
+            $table: $db.sendTasks,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<T> draftSyncTasksRefs<T extends Object>(
+    Expression<T> Function($$DraftSyncTasksTableAnnotationComposer a) f,
+  ) {
+    final $$DraftSyncTasksTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.draftSyncTasks,
+      getReferencedColumn: (t) => t.accountId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$DraftSyncTasksTableAnnotationComposer(
+            $db: $db,
+            $table: $db.draftSyncTasks,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
 }
 
 class $$AccountsTableTableManager
@@ -4982,6 +6570,8 @@ class $$AccountsTableTableManager
             bool foldersRefs,
             bool messagesRefs,
             bool outboxOpsRefs,
+            bool sendTasksRefs,
+            bool draftSyncTasksRefs,
           })
         > {
   $$AccountsTableTableManager(_$AppDatabase db, $AccountsTable table)
@@ -5084,6 +6674,8 @@ class $$AccountsTableTableManager
                 foldersRefs = false,
                 messagesRefs = false,
                 outboxOpsRefs = false,
+                sendTasksRefs = false,
+                draftSyncTasksRefs = false,
               }) {
                 return PrefetchHooks(
                   db: db,
@@ -5091,6 +6683,8 @@ class $$AccountsTableTableManager
                     if (foldersRefs) db.folders,
                     if (messagesRefs) db.messages,
                     if (outboxOpsRefs) db.outboxOps,
+                    if (sendTasksRefs) db.sendTasks,
+                    if (draftSyncTasksRefs) db.draftSyncTasks,
                   ],
                   addJoins: null,
                   getPrefetchedDataCallback: (items) async {
@@ -5158,6 +6752,48 @@ class $$AccountsTableTableManager
                               ),
                           typedResults: items,
                         ),
+                      if (sendTasksRefs)
+                        await $_getPrefetchedData<
+                          Account,
+                          $AccountsTable,
+                          SendTask
+                        >(
+                          currentTable: table,
+                          referencedTable: $$AccountsTableReferences
+                              ._sendTasksRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$AccountsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).sendTasksRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.accountId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
+                      if (draftSyncTasksRefs)
+                        await $_getPrefetchedData<
+                          Account,
+                          $AccountsTable,
+                          DraftSyncTask
+                        >(
+                          currentTable: table,
+                          referencedTable: $$AccountsTableReferences
+                              ._draftSyncTasksRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$AccountsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).draftSyncTasksRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.accountId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
                     ];
                   },
                 );
@@ -5182,6 +6818,8 @@ typedef $$AccountsTableProcessedTableManager =
         bool foldersRefs,
         bool messagesRefs,
         bool outboxOpsRefs,
+        bool sendTasksRefs,
+        bool draftSyncTasksRefs,
       })
     >;
 typedef $$FoldersTableCreateCompanionBuilder =
@@ -5225,8 +6863,8 @@ final class $$FoldersTableReferences
     extends BaseReferences<_$AppDatabase, $FoldersTable, Folder> {
   $$FoldersTableReferences(super.$_db, super.$_table, super.$_typedResult);
 
-  static $AccountsTable _accountIdTable(_$AppDatabase db) => db.accounts
-      .createAlias($_aliasNameGenerator(db.folders.accountId, db.accounts.id));
+  static $AccountsTable _accountIdTable(_$AppDatabase db) =>
+      db.accounts.createAlias('folders__account_id__accounts__id');
 
   $$AccountsTableProcessedTableManager get accountId {
     final $_column = $_itemColumn<String>('account_id')!;
@@ -5246,7 +6884,7 @@ final class $$FoldersTableReferences
     _$AppDatabase db,
   ) => MultiTypedResultKey.fromTable(
     db.messages,
-    aliasName: $_aliasNameGenerator(db.folders.id, db.messages.folderId),
+    aliasName: 'folders__id__messages__folder_id',
   );
 
   $$MessagesTableProcessedTableManager get messagesRefs {
@@ -5264,7 +6902,7 @@ final class $$FoldersTableReferences
   static MultiTypedResultKey<$SyncStatesTable, List<SyncState>>
   _syncStatesRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.syncStates,
-    aliasName: $_aliasNameGenerator(db.folders.id, db.syncStates.folderId),
+    aliasName: 'folders__id__sync_states__folder_id',
   );
 
   $$SyncStatesTableProcessedTableManager get syncStatesRefs {
@@ -5893,11 +7531,13 @@ typedef $$MessagesTableCreateCompanionBuilder =
       Value<int?> imapUidValidity,
       Value<String?> graphMessageId,
       Value<String?> gmailMessageId,
+      Value<String?> serverDraftId,
       Value<String> subject,
       Value<String?> fromName,
       Value<String?> fromEmail,
       Value<String> toRecipients,
       Value<String> ccRecipients,
+      Value<String> bccRecipients,
       required DateTime date,
       Value<String> preview,
       Value<int> flagsBitmask,
@@ -5916,11 +7556,13 @@ typedef $$MessagesTableUpdateCompanionBuilder =
       Value<int?> imapUidValidity,
       Value<String?> graphMessageId,
       Value<String?> gmailMessageId,
+      Value<String?> serverDraftId,
       Value<String> subject,
       Value<String?> fromName,
       Value<String?> fromEmail,
       Value<String> toRecipients,
       Value<String> ccRecipients,
+      Value<String> bccRecipients,
       Value<DateTime> date,
       Value<String> preview,
       Value<int> flagsBitmask,
@@ -5935,8 +7577,8 @@ final class $$MessagesTableReferences
     extends BaseReferences<_$AppDatabase, $MessagesTable, Message> {
   $$MessagesTableReferences(super.$_db, super.$_table, super.$_typedResult);
 
-  static $AccountsTable _accountIdTable(_$AppDatabase db) => db.accounts
-      .createAlias($_aliasNameGenerator(db.messages.accountId, db.accounts.id));
+  static $AccountsTable _accountIdTable(_$AppDatabase db) =>
+      db.accounts.createAlias('messages__account_id__accounts__id');
 
   $$AccountsTableProcessedTableManager get accountId {
     final $_column = $_itemColumn<String>('account_id')!;
@@ -5952,8 +7594,8 @@ final class $$MessagesTableReferences
     );
   }
 
-  static $FoldersTable _folderIdTable(_$AppDatabase db) => db.folders
-      .createAlias($_aliasNameGenerator(db.messages.folderId, db.folders.id));
+  static $FoldersTable _folderIdTable(_$AppDatabase db) =>
+      db.folders.createAlias('messages__folder_id__folders__id');
 
   $$FoldersTableProcessedTableManager get folderId {
     final $_column = $_itemColumn<String>('folder_id')!;
@@ -5972,7 +7614,7 @@ final class $$MessagesTableReferences
   static MultiTypedResultKey<$MessageBodiesTable, List<MessageBody>>
   _messageBodiesRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.messageBodies,
-    aliasName: $_aliasNameGenerator(db.messages.id, db.messageBodies.messageId),
+    aliasName: 'messages__id__message_bodies__message_id',
   );
 
   $$MessageBodiesTableProcessedTableManager get messageBodiesRefs {
@@ -6022,6 +7664,11 @@ class $$MessagesTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
+  ColumnFilters<String> get serverDraftId => $composableBuilder(
+    column: $table.serverDraftId,
+    builder: (column) => ColumnFilters(column),
+  );
+
   ColumnFilters<String> get subject => $composableBuilder(
     column: $table.subject,
     builder: (column) => ColumnFilters(column),
@@ -6044,6 +7691,11 @@ class $$MessagesTableFilterComposer
 
   ColumnFilters<String> get ccRecipients => $composableBuilder(
     column: $table.ccRecipients,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get bccRecipients => $composableBuilder(
+    column: $table.bccRecipients,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -6188,6 +7840,11 @@ class $$MessagesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get serverDraftId => $composableBuilder(
+    column: $table.serverDraftId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get subject => $composableBuilder(
     column: $table.subject,
     builder: (column) => ColumnOrderings(column),
@@ -6210,6 +7867,11 @@ class $$MessagesTableOrderingComposer
 
   ColumnOrderings<String> get ccRecipients => $composableBuilder(
     column: $table.ccRecipients,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get bccRecipients => $composableBuilder(
+    column: $table.bccRecipients,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -6325,6 +7987,11 @@ class $$MessagesTableAnnotationComposer
     builder: (column) => column,
   );
 
+  GeneratedColumn<String> get serverDraftId => $composableBuilder(
+    column: $table.serverDraftId,
+    builder: (column) => column,
+  );
+
   GeneratedColumn<String> get subject =>
       $composableBuilder(column: $table.subject, builder: (column) => column);
 
@@ -6341,6 +8008,11 @@ class $$MessagesTableAnnotationComposer
 
   GeneratedColumn<String> get ccRecipients => $composableBuilder(
     column: $table.ccRecipients,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get bccRecipients => $composableBuilder(
+    column: $table.bccRecipients,
     builder: (column) => column,
   );
 
@@ -6482,11 +8154,13 @@ class $$MessagesTableTableManager
                 Value<int?> imapUidValidity = const Value.absent(),
                 Value<String?> graphMessageId = const Value.absent(),
                 Value<String?> gmailMessageId = const Value.absent(),
+                Value<String?> serverDraftId = const Value.absent(),
                 Value<String> subject = const Value.absent(),
                 Value<String?> fromName = const Value.absent(),
                 Value<String?> fromEmail = const Value.absent(),
                 Value<String> toRecipients = const Value.absent(),
                 Value<String> ccRecipients = const Value.absent(),
+                Value<String> bccRecipients = const Value.absent(),
                 Value<DateTime> date = const Value.absent(),
                 Value<String> preview = const Value.absent(),
                 Value<int> flagsBitmask = const Value.absent(),
@@ -6503,11 +8177,13 @@ class $$MessagesTableTableManager
                 imapUidValidity: imapUidValidity,
                 graphMessageId: graphMessageId,
                 gmailMessageId: gmailMessageId,
+                serverDraftId: serverDraftId,
                 subject: subject,
                 fromName: fromName,
                 fromEmail: fromEmail,
                 toRecipients: toRecipients,
                 ccRecipients: ccRecipients,
+                bccRecipients: bccRecipients,
                 date: date,
                 preview: preview,
                 flagsBitmask: flagsBitmask,
@@ -6526,11 +8202,13 @@ class $$MessagesTableTableManager
                 Value<int?> imapUidValidity = const Value.absent(),
                 Value<String?> graphMessageId = const Value.absent(),
                 Value<String?> gmailMessageId = const Value.absent(),
+                Value<String?> serverDraftId = const Value.absent(),
                 Value<String> subject = const Value.absent(),
                 Value<String?> fromName = const Value.absent(),
                 Value<String?> fromEmail = const Value.absent(),
                 Value<String> toRecipients = const Value.absent(),
                 Value<String> ccRecipients = const Value.absent(),
+                Value<String> bccRecipients = const Value.absent(),
                 required DateTime date,
                 Value<String> preview = const Value.absent(),
                 Value<int> flagsBitmask = const Value.absent(),
@@ -6547,11 +8225,13 @@ class $$MessagesTableTableManager
                 imapUidValidity: imapUidValidity,
                 graphMessageId: graphMessageId,
                 gmailMessageId: gmailMessageId,
+                serverDraftId: serverDraftId,
                 subject: subject,
                 fromName: fromName,
                 fromEmail: fromEmail,
                 toRecipients: toRecipients,
                 ccRecipients: ccRecipients,
+                bccRecipients: bccRecipients,
                 date: date,
                 preview: preview,
                 flagsBitmask: flagsBitmask,
@@ -6704,9 +8384,7 @@ final class $$MessageBodiesTableReferences
   );
 
   static $MessagesTable _messageIdTable(_$AppDatabase db) =>
-      db.messages.createAlias(
-        $_aliasNameGenerator(db.messageBodies.messageId, db.messages.id),
-      );
+      db.messages.createAlias('message_bodies__message_id__messages__id');
 
   $$MessagesTableProcessedTableManager get messageId {
     final $_column = $_itemColumn<String>('message_id')!;
@@ -7051,8 +8729,8 @@ final class $$SyncStatesTableReferences
     extends BaseReferences<_$AppDatabase, $SyncStatesTable, SyncState> {
   $$SyncStatesTableReferences(super.$_db, super.$_table, super.$_typedResult);
 
-  static $FoldersTable _folderIdTable(_$AppDatabase db) => db.folders
-      .createAlias($_aliasNameGenerator(db.syncStates.folderId, db.folders.id));
+  static $FoldersTable _folderIdTable(_$AppDatabase db) =>
+      db.folders.createAlias('sync_states__folder_id__folders__id');
 
   $$FoldersTableProcessedTableManager get folderId {
     final $_column = $_itemColumn<String>('folder_id')!;
@@ -7432,9 +9110,7 @@ final class $$OutboxOpsTableReferences
   $$OutboxOpsTableReferences(super.$_db, super.$_table, super.$_typedResult);
 
   static $AccountsTable _accountIdTable(_$AppDatabase db) =>
-      db.accounts.createAlias(
-        $_aliasNameGenerator(db.outboxOps.accountId, db.accounts.id),
-      );
+      db.accounts.createAlias('outbox_ops__account_id__accounts__id');
 
   $$AccountsTableProcessedTableManager get accountId {
     final $_column = $_itemColumn<String>('account_id')!;
@@ -7757,6 +9433,866 @@ typedef $$OutboxOpsTableProcessedTableManager =
       OutboxOp,
       PrefetchHooks Function({bool accountId})
     >;
+typedef $$SendTasksTableCreateCompanionBuilder =
+    SendTasksCompanion Function({
+      required String id,
+      required String accountId,
+      required String payload,
+      Value<SendTaskStatus> status,
+      Value<int> attempts,
+      Value<String?> lastError,
+      Value<String?> draftMessageId,
+      Value<DateTime> createdAt,
+      Value<DateTime> updatedAt,
+      Value<int> rowid,
+    });
+typedef $$SendTasksTableUpdateCompanionBuilder =
+    SendTasksCompanion Function({
+      Value<String> id,
+      Value<String> accountId,
+      Value<String> payload,
+      Value<SendTaskStatus> status,
+      Value<int> attempts,
+      Value<String?> lastError,
+      Value<String?> draftMessageId,
+      Value<DateTime> createdAt,
+      Value<DateTime> updatedAt,
+      Value<int> rowid,
+    });
+
+final class $$SendTasksTableReferences
+    extends BaseReferences<_$AppDatabase, $SendTasksTable, SendTask> {
+  $$SendTasksTableReferences(super.$_db, super.$_table, super.$_typedResult);
+
+  static $AccountsTable _accountIdTable(_$AppDatabase db) =>
+      db.accounts.createAlias('send_tasks__account_id__accounts__id');
+
+  $$AccountsTableProcessedTableManager get accountId {
+    final $_column = $_itemColumn<String>('account_id')!;
+
+    final manager = $$AccountsTableTableManager(
+      $_db,
+      $_db.accounts,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_accountIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$SendTasksTableFilterComposer
+    extends Composer<_$AppDatabase, $SendTasksTable> {
+  $$SendTasksTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get payload => $composableBuilder(
+    column: $table.payload,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnWithTypeConverterFilters<SendTaskStatus, SendTaskStatus, int>
+  get status => $composableBuilder(
+    column: $table.status,
+    builder: (column) => ColumnWithTypeConverterFilters(column),
+  );
+
+  ColumnFilters<int> get attempts => $composableBuilder(
+    column: $table.attempts,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get lastError => $composableBuilder(
+    column: $table.lastError,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get draftMessageId => $composableBuilder(
+    column: $table.draftMessageId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$AccountsTableFilterComposer get accountId {
+    final $$AccountsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.accounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AccountsTableFilterComposer(
+            $db: $db,
+            $table: $db.accounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$SendTasksTableOrderingComposer
+    extends Composer<_$AppDatabase, $SendTasksTable> {
+  $$SendTasksTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get payload => $composableBuilder(
+    column: $table.payload,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get status => $composableBuilder(
+    column: $table.status,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get attempts => $composableBuilder(
+    column: $table.attempts,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get lastError => $composableBuilder(
+    column: $table.lastError,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get draftMessageId => $composableBuilder(
+    column: $table.draftMessageId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$AccountsTableOrderingComposer get accountId {
+    final $$AccountsTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.accounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AccountsTableOrderingComposer(
+            $db: $db,
+            $table: $db.accounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$SendTasksTableAnnotationComposer
+    extends Composer<_$AppDatabase, $SendTasksTable> {
+  $$SendTasksTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get payload =>
+      $composableBuilder(column: $table.payload, builder: (column) => column);
+
+  GeneratedColumnWithTypeConverter<SendTaskStatus, int> get status =>
+      $composableBuilder(column: $table.status, builder: (column) => column);
+
+  GeneratedColumn<int> get attempts =>
+      $composableBuilder(column: $table.attempts, builder: (column) => column);
+
+  GeneratedColumn<String> get lastError =>
+      $composableBuilder(column: $table.lastError, builder: (column) => column);
+
+  GeneratedColumn<String> get draftMessageId => $composableBuilder(
+    column: $table.draftMessageId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  $$AccountsTableAnnotationComposer get accountId {
+    final $$AccountsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.accounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AccountsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.accounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$SendTasksTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $SendTasksTable,
+          SendTask,
+          $$SendTasksTableFilterComposer,
+          $$SendTasksTableOrderingComposer,
+          $$SendTasksTableAnnotationComposer,
+          $$SendTasksTableCreateCompanionBuilder,
+          $$SendTasksTableUpdateCompanionBuilder,
+          (SendTask, $$SendTasksTableReferences),
+          SendTask,
+          PrefetchHooks Function({bool accountId})
+        > {
+  $$SendTasksTableTableManager(_$AppDatabase db, $SendTasksTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$SendTasksTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$SendTasksTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$SendTasksTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String> accountId = const Value.absent(),
+                Value<String> payload = const Value.absent(),
+                Value<SendTaskStatus> status = const Value.absent(),
+                Value<int> attempts = const Value.absent(),
+                Value<String?> lastError = const Value.absent(),
+                Value<String?> draftMessageId = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+                Value<DateTime> updatedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => SendTasksCompanion(
+                id: id,
+                accountId: accountId,
+                payload: payload,
+                status: status,
+                attempts: attempts,
+                lastError: lastError,
+                draftMessageId: draftMessageId,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required String accountId,
+                required String payload,
+                Value<SendTaskStatus> status = const Value.absent(),
+                Value<int> attempts = const Value.absent(),
+                Value<String?> lastError = const Value.absent(),
+                Value<String?> draftMessageId = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+                Value<DateTime> updatedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => SendTasksCompanion.insert(
+                id: id,
+                accountId: accountId,
+                payload: payload,
+                status: status,
+                attempts: attempts,
+                lastError: lastError,
+                draftMessageId: draftMessageId,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable(table),
+                  $$SendTasksTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: ({accountId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (accountId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.accountId,
+                                referencedTable: $$SendTasksTableReferences
+                                    ._accountIdTable(db),
+                                referencedColumn: $$SendTasksTableReferences
+                                    ._accountIdTable(db)
+                                    .id,
+                              )
+                              as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ),
+      );
+}
+
+typedef $$SendTasksTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $SendTasksTable,
+      SendTask,
+      $$SendTasksTableFilterComposer,
+      $$SendTasksTableOrderingComposer,
+      $$SendTasksTableAnnotationComposer,
+      $$SendTasksTableCreateCompanionBuilder,
+      $$SendTasksTableUpdateCompanionBuilder,
+      (SendTask, $$SendTasksTableReferences),
+      SendTask,
+      PrefetchHooks Function({bool accountId})
+    >;
+typedef $$DraftSyncTasksTableCreateCompanionBuilder =
+    DraftSyncTasksCompanion Function({
+      required String id,
+      required String accountId,
+      required String opType,
+      Value<String?> draftMessageId,
+      Value<String?> payload,
+      Value<String?> serverDraftId,
+      Value<DraftSyncTaskStatus> status,
+      Value<int> attempts,
+      Value<String?> lastError,
+      Value<DateTime?> nextAttemptAt,
+      Value<DateTime> createdAt,
+      Value<DateTime> updatedAt,
+      Value<int> rowid,
+    });
+typedef $$DraftSyncTasksTableUpdateCompanionBuilder =
+    DraftSyncTasksCompanion Function({
+      Value<String> id,
+      Value<String> accountId,
+      Value<String> opType,
+      Value<String?> draftMessageId,
+      Value<String?> payload,
+      Value<String?> serverDraftId,
+      Value<DraftSyncTaskStatus> status,
+      Value<int> attempts,
+      Value<String?> lastError,
+      Value<DateTime?> nextAttemptAt,
+      Value<DateTime> createdAt,
+      Value<DateTime> updatedAt,
+      Value<int> rowid,
+    });
+
+final class $$DraftSyncTasksTableReferences
+    extends BaseReferences<_$AppDatabase, $DraftSyncTasksTable, DraftSyncTask> {
+  $$DraftSyncTasksTableReferences(
+    super.$_db,
+    super.$_table,
+    super.$_typedResult,
+  );
+
+  static $AccountsTable _accountIdTable(_$AppDatabase db) =>
+      db.accounts.createAlias('draft_sync_tasks__account_id__accounts__id');
+
+  $$AccountsTableProcessedTableManager get accountId {
+    final $_column = $_itemColumn<String>('account_id')!;
+
+    final manager = $$AccountsTableTableManager(
+      $_db,
+      $_db.accounts,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_accountIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$DraftSyncTasksTableFilterComposer
+    extends Composer<_$AppDatabase, $DraftSyncTasksTable> {
+  $$DraftSyncTasksTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get opType => $composableBuilder(
+    column: $table.opType,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get draftMessageId => $composableBuilder(
+    column: $table.draftMessageId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get payload => $composableBuilder(
+    column: $table.payload,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get serverDraftId => $composableBuilder(
+    column: $table.serverDraftId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnWithTypeConverterFilters<DraftSyncTaskStatus, DraftSyncTaskStatus, int>
+  get status => $composableBuilder(
+    column: $table.status,
+    builder: (column) => ColumnWithTypeConverterFilters(column),
+  );
+
+  ColumnFilters<int> get attempts => $composableBuilder(
+    column: $table.attempts,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get lastError => $composableBuilder(
+    column: $table.lastError,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get nextAttemptAt => $composableBuilder(
+    column: $table.nextAttemptAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$AccountsTableFilterComposer get accountId {
+    final $$AccountsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.accounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AccountsTableFilterComposer(
+            $db: $db,
+            $table: $db.accounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$DraftSyncTasksTableOrderingComposer
+    extends Composer<_$AppDatabase, $DraftSyncTasksTable> {
+  $$DraftSyncTasksTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get opType => $composableBuilder(
+    column: $table.opType,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get draftMessageId => $composableBuilder(
+    column: $table.draftMessageId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get payload => $composableBuilder(
+    column: $table.payload,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get serverDraftId => $composableBuilder(
+    column: $table.serverDraftId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get status => $composableBuilder(
+    column: $table.status,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get attempts => $composableBuilder(
+    column: $table.attempts,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get lastError => $composableBuilder(
+    column: $table.lastError,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get nextAttemptAt => $composableBuilder(
+    column: $table.nextAttemptAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$AccountsTableOrderingComposer get accountId {
+    final $$AccountsTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.accounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AccountsTableOrderingComposer(
+            $db: $db,
+            $table: $db.accounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$DraftSyncTasksTableAnnotationComposer
+    extends Composer<_$AppDatabase, $DraftSyncTasksTable> {
+  $$DraftSyncTasksTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get opType =>
+      $composableBuilder(column: $table.opType, builder: (column) => column);
+
+  GeneratedColumn<String> get draftMessageId => $composableBuilder(
+    column: $table.draftMessageId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get payload =>
+      $composableBuilder(column: $table.payload, builder: (column) => column);
+
+  GeneratedColumn<String> get serverDraftId => $composableBuilder(
+    column: $table.serverDraftId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumnWithTypeConverter<DraftSyncTaskStatus, int> get status =>
+      $composableBuilder(column: $table.status, builder: (column) => column);
+
+  GeneratedColumn<int> get attempts =>
+      $composableBuilder(column: $table.attempts, builder: (column) => column);
+
+  GeneratedColumn<String> get lastError =>
+      $composableBuilder(column: $table.lastError, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get nextAttemptAt => $composableBuilder(
+    column: $table.nextAttemptAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  $$AccountsTableAnnotationComposer get accountId {
+    final $$AccountsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.accounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AccountsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.accounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$DraftSyncTasksTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $DraftSyncTasksTable,
+          DraftSyncTask,
+          $$DraftSyncTasksTableFilterComposer,
+          $$DraftSyncTasksTableOrderingComposer,
+          $$DraftSyncTasksTableAnnotationComposer,
+          $$DraftSyncTasksTableCreateCompanionBuilder,
+          $$DraftSyncTasksTableUpdateCompanionBuilder,
+          (DraftSyncTask, $$DraftSyncTasksTableReferences),
+          DraftSyncTask,
+          PrefetchHooks Function({bool accountId})
+        > {
+  $$DraftSyncTasksTableTableManager(
+    _$AppDatabase db,
+    $DraftSyncTasksTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$DraftSyncTasksTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$DraftSyncTasksTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$DraftSyncTasksTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String> accountId = const Value.absent(),
+                Value<String> opType = const Value.absent(),
+                Value<String?> draftMessageId = const Value.absent(),
+                Value<String?> payload = const Value.absent(),
+                Value<String?> serverDraftId = const Value.absent(),
+                Value<DraftSyncTaskStatus> status = const Value.absent(),
+                Value<int> attempts = const Value.absent(),
+                Value<String?> lastError = const Value.absent(),
+                Value<DateTime?> nextAttemptAt = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+                Value<DateTime> updatedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => DraftSyncTasksCompanion(
+                id: id,
+                accountId: accountId,
+                opType: opType,
+                draftMessageId: draftMessageId,
+                payload: payload,
+                serverDraftId: serverDraftId,
+                status: status,
+                attempts: attempts,
+                lastError: lastError,
+                nextAttemptAt: nextAttemptAt,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required String accountId,
+                required String opType,
+                Value<String?> draftMessageId = const Value.absent(),
+                Value<String?> payload = const Value.absent(),
+                Value<String?> serverDraftId = const Value.absent(),
+                Value<DraftSyncTaskStatus> status = const Value.absent(),
+                Value<int> attempts = const Value.absent(),
+                Value<String?> lastError = const Value.absent(),
+                Value<DateTime?> nextAttemptAt = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+                Value<DateTime> updatedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => DraftSyncTasksCompanion.insert(
+                id: id,
+                accountId: accountId,
+                opType: opType,
+                draftMessageId: draftMessageId,
+                payload: payload,
+                serverDraftId: serverDraftId,
+                status: status,
+                attempts: attempts,
+                lastError: lastError,
+                nextAttemptAt: nextAttemptAt,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable(table),
+                  $$DraftSyncTasksTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: ({accountId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (accountId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.accountId,
+                                referencedTable: $$DraftSyncTasksTableReferences
+                                    ._accountIdTable(db),
+                                referencedColumn:
+                                    $$DraftSyncTasksTableReferences
+                                        ._accountIdTable(db)
+                                        .id,
+                              )
+                              as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ),
+      );
+}
+
+typedef $$DraftSyncTasksTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $DraftSyncTasksTable,
+      DraftSyncTask,
+      $$DraftSyncTasksTableFilterComposer,
+      $$DraftSyncTasksTableOrderingComposer,
+      $$DraftSyncTasksTableAnnotationComposer,
+      $$DraftSyncTasksTableCreateCompanionBuilder,
+      $$DraftSyncTasksTableUpdateCompanionBuilder,
+      (DraftSyncTask, $$DraftSyncTasksTableReferences),
+      DraftSyncTask,
+      PrefetchHooks Function({bool accountId})
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -7773,4 +10309,8 @@ class $AppDatabaseManager {
       $$SyncStatesTableTableManager(_db, _db.syncStates);
   $$OutboxOpsTableTableManager get outboxOps =>
       $$OutboxOpsTableTableManager(_db, _db.outboxOps);
+  $$SendTasksTableTableManager get sendTasks =>
+      $$SendTasksTableTableManager(_db, _db.sendTasks);
+  $$DraftSyncTasksTableTableManager get draftSyncTasks =>
+      $$DraftSyncTasksTableTableManager(_db, _db.draftSyncTasks);
 }

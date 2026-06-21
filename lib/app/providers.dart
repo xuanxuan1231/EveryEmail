@@ -16,7 +16,9 @@ import '../data/settings/display_settings.dart';
 import '../data/settings/imap_realtime_settings.dart';
 import '../data/settings/remote_image_trust.dart';
 import '../data/sync/body_prefetch_service.dart';
+import '../data/sync/draft_sync_queue_service.dart';
 import '../data/sync/realtime_sync_service.dart';
+import '../data/sync/send_queue_service.dart';
 import '../data/sync/sync_service.dart';
 import '../data/webhook/gmail_push_service.dart';
 import '../data/webhook/gmail_watch_manager.dart';
@@ -294,6 +296,14 @@ class AccountSettingsController extends StateNotifier<AccountSettings> {
     if (changed) onRealtimeChanged?.call();
   }
 
+  Future<void> setDraftSyncAutoRetry(bool enabled) {
+    return _set(state.copyWith(draftSyncAutoRetry: enabled));
+  }
+
+  Future<void> setDraftSyncRetryInterval(Duration interval) {
+    return _set(state.copyWith(draftSyncRetryInterval: interval));
+  }
+
   Future<void> setFolderSyncScope(AccountFolderSyncScope scope) {
     return _set(state.copyWith(folderSyncScope: scope));
   }
@@ -366,6 +376,36 @@ final bodyPrefetchServiceProvider = Provider<BodyPrefetchService>((ref) {
     service.dispose();
   });
   return service;
+});
+
+/// 发送队列服务：撰写/回复/转发提交的邮件在此排队、发送、失败重试。
+final sendQueueServiceProvider = Provider<SendQueueService>((ref) {
+  final service = SendQueueService(
+    db: ref.watch(databaseProvider),
+    syncService: ref.watch(syncServiceProvider),
+  );
+  ref.onDispose(service.dispose);
+  return service;
+});
+
+/// 发送队列中全部未完成任务（顶栏角标与队列页消费）。
+final sendQueueTasksProvider = StreamProvider<List<SendTask>>((ref) {
+  return ref.watch(sendQueueServiceProvider).watchTasks();
+});
+
+/// 草稿同步队列服务：本地草稿异步同步到服务端草稿箱。
+final draftSyncQueueServiceProvider = Provider<DraftSyncQueueService>((ref) {
+  final service = DraftSyncQueueService(
+    db: ref.watch(databaseProvider),
+    syncService: ref.watch(syncServiceProvider),
+  );
+  ref.onDispose(service.dispose);
+  return service;
+});
+
+/// 草稿同步队列中全部未完成任务。
+final draftSyncTasksProvider = StreamProvider<List<DraftSyncTask>>((ref) {
+  return ref.watch(draftSyncQueueServiceProvider).watchTasks();
 });
 
 /// Webhook 服务。

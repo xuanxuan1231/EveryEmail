@@ -106,6 +106,11 @@ class _RealtimeSyncCoordinatorState
     // SyncService（否则首轮同步的批量预取会丢失）。
     ref.read(bodyPrefetchServiceProvider);
 
+    // 实例化发送队列并尝试一轮发送：恢复上次未发完的任务、重试失败任务
+    // （启动时网络通常已就绪），同时启动其连通性监听。
+    unawaited(ref.read(sendQueueServiceProvider).retryAll());
+    unawaited(ref.read(draftSyncQueueServiceProvider).processQueue());
+
     final List<dynamic> rows;
     try {
       rows = await db.accountDao.getAccounts();
@@ -232,6 +237,10 @@ class _RealtimeSyncCoordinatorState
 
     await _refreshStaleConnections();
     await _requestSyncForAllAccounts();
+    unawaited(_refreshPushRegistrations());
+    // 回前台顺带把发送队列里失败/排队的任务再推一次。
+    unawaited(ref.read(sendQueueServiceProvider).retryAll());
+    unawaited(ref.read(draftSyncQueueServiceProvider).processQueue());
   }
 
   Future<void> _requestSyncForAllAccounts() async {
@@ -252,6 +261,23 @@ class _RealtimeSyncCoordinatorState
     if (!_active) return;
     await _stop();
     await _start();
+  }
+
+  Future<void> _refreshPushRegistrations() async {
+    try {
+      final manager = ref.read(webhookManagerProvider);
+      final gmailManager = ref.read(gmailWatchManagerProvider);
+      unawaited(manager.enableForAllMicrosoftAccounts());
+      unawaited(gmailManager.enableForAllGmailAccounts());
+
+      final fcmToken = ref.read(fcmTokenProvider);
+      if (fcmToken != null && fcmToken.isNotEmpty) {
+        unawaited(manager.registerFcmTokenForAllMicrosoftAccounts(fcmToken));
+        unawaited(gmailManager.registerFcmTokenForAllGmailAccounts(fcmToken));
+      }
+    } catch (e) {
+      debugPrint('RealtimeSyncCoordinator: 恢复推送注册失败: $e');
+    }
   }
 
   /// 周期刷新：持续前台时，IDLE 长连接一旦超过 OAuth 新鲜期就主动重连刷新 token

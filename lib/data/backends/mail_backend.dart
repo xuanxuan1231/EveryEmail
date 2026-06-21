@@ -2,6 +2,7 @@ import '../../domain/enums/account_enums.dart';
 import '../../domain/models/mailbox_folder.dart';
 import '../../domain/models/message_ref.dart';
 import '../../domain/models/mime_content.dart';
+import '../../domain/models/outgoing_message.dart';
 import 'sync_types.dart';
 
 /// 统一邮件后端抽象——本应用的架构基石。
@@ -60,8 +61,45 @@ abstract interface class MailBackend {
   /// 删除（移到废纸篓或永久删除，由实现决定语义）。
   Future<void> delete(List<MessageRef> refs);
 
+  /// 发送一封邮件。
+  ///
+  /// IMAP：经 SMTP 投递并 APPEND 到「已发送」文件夹；Gmail/Graph：经各自 REST
+  /// 发送端点（服务端自动归档到已发送）。失败抛 [MailBackendException]/[MailAuthException]。
+  Future<void> sendMessage(OutgoingMessage message);
+
+  /// 保存/更新服务端草稿。
+  ///
+  /// [OutgoingMessage.serverDraftId] 非空时应覆盖更新既有服务端草稿。IMAP 后端若暂不
+  /// 支持 APPEND 到草稿箱，可返回 null，上层仍会保存本地草稿。
+  Future<SavedDraft?> saveDraft(OutgoingMessage message);
+
+  /// 删除服务端草稿。草稿不存在时应视为成功。
+  Future<void> deleteDraft(String draftId);
+
   /// 监听文件夹变化。IMAP：真 IDLE 事件流；Graph：轮询 delta 包装成事件流。
   Stream<MailboxEvent> watch(MailboxFolder folder);
+}
+
+/// 服务端草稿保存结果。
+class SavedDraft {
+  const SavedDraft({
+    required this.draftId,
+    this.messageId,
+    this.threadId,
+    this.folderId,
+  });
+
+  /// 服务端草稿 id。Gmail 是 draft id；Graph 是 draft message id。
+  final String draftId;
+
+  /// 草稿对应的服务端 message id（Gmail draft.message.id；Graph 与 [draftId] 相同）。
+  final String? messageId;
+
+  /// Gmail threadId / Graph conversationId。
+  final String? threadId;
+
+  /// Graph draft parentFolderId。
+  final String? folderId;
 }
 
 /// 后端操作异常基类。

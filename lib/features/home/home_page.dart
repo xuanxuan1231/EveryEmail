@@ -17,7 +17,13 @@ import '../../data/sync/sync_service.dart';
 import '../../domain/enums/message_enums.dart';
 import '../../domain/models/account_config.dart';
 import '../../domain/models/conversation_summary.dart';
+import '../../domain/models/mail_address.dart';
+import '../../domain/models/mail_attachment.dart';
+import '../../domain/models/mail_recipient.dart';
+import '../../domain/models/outgoing_message.dart';
 import '../../domain/models/unified_mailbox.dart';
+import '../compose/compose_args.dart';
+import '../compose/send_queue_status_button.dart';
 import 'widgets/gmail_mobile_message_item.dart';
 
 /// 主页面（移动端布局）。
@@ -184,6 +190,11 @@ class _HomePageState extends ConsumerState<HomePage> {
           context.push('/search');
         },
         onMessageTap: (message) {
+          // 草稿：打开撰写页继续编辑，而非只读详情页。
+          if (_isDraft(message)) {
+            _openDraft(context, message);
+            return;
+          }
           // 点击即抢先下载正文（高优先级），与导航转场重叠，争取点开即见内容。
           ref.read(bodyPrefetchServiceProvider).enqueueOnTap(message.id);
           context.push(
@@ -217,9 +228,7 @@ class _HomePageState extends ConsumerState<HomePage> {
         },
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          // TODO: 撰写邮件
-        },
+        onPressed: () => context.push('/compose'),
         child: const Icon(Symbols.edit),
       ),
     );
@@ -1176,6 +1185,50 @@ class _HomePageState extends ConsumerState<HomePage> {
       colorValue: account.colorValue,
     );
   }
+
+  /// 邮件是否为草稿（草稿标志位置位）。
+  bool _isDraft(Message message) =>
+      (message.flagsBitmask & (1 << MessageFlag.draft.index)) != 0;
+
+  /// 打开草稿继续编辑：从本地正文/附件重建撰写页参数。
+  Future<void> _openDraft(BuildContext context, Message message) async {
+    final db = ref.read(databaseProvider);
+    final body = await db.messageDao.getBody(message.id);
+
+    List<MailAddress> toAddresses(String json) =>
+        RecipientUtils.parseRecipients(
+          json,
+        ).map((r) => MailAddress(email: r.email, name: r.name)).toList();
+
+    final attachments = AttachmentUtils.parseAttachments(body?.attachmentsMeta)
+        .where((a) => a.localPath != null)
+        .map(
+          (a) => OutgoingAttachment(
+            filename: a.filename ?? 'attachment',
+            mimeType: a.mimeType,
+            localPath: a.localPath!,
+            size: a.size ?? 0,
+          ),
+        )
+        .toList();
+
+    if (!context.mounted) return;
+    context.push(
+      '/compose',
+      extra: ComposeArgs(
+        mode: ComposeMode.draft,
+        accountId: message.accountId,
+        to: toAddresses(message.toRecipients),
+        cc: toAddresses(message.ccRecipients),
+        bcc: toAddresses(message.bccRecipients),
+        subject: message.subject,
+        bodyText: body?.plainText ?? '',
+        serverDraftId: message.serverDraftId,
+        draftMessageId: message.id,
+        attachments: attachments,
+      ),
+    );
+  }
 }
 
 enum _MessageListMenuAction {
@@ -1349,6 +1402,7 @@ class _MessageListState extends ConsumerState<_MessageList> {
               ? Text('已选择 $selectedCount 封')
               : _buildAppBarTitle(theme),
           actions: [
+            if (!selectionMode) const SendQueueStatusButton(),
             if (!selectionMode)
               IconButton(
                 icon: const Icon(Symbols.search),

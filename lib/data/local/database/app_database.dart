@@ -4,9 +4,11 @@ import 'package:drift_flutter/drift_flutter.dart';
 import '../../../domain/enums/account_enums.dart';
 import '../../../domain/enums/message_enums.dart';
 import 'daos/account_dao.dart';
+import 'daos/draft_sync_task_dao.dart';
 import 'daos/folder_dao.dart';
 import 'daos/message_dao.dart';
 import 'daos/outbox_dao.dart';
+import 'daos/send_task_dao.dart';
 import 'tables.dart';
 
 part 'app_database.g.dart';
@@ -15,14 +17,30 @@ part 'app_database.g.dart';
 ///
 /// 是 UI 的唯一读取源：界面通过响应式查询（`watch*`）订阅，网络层只负责写入/刷新。
 @DriftDatabase(
-  tables: [Accounts, Folders, Messages, MessageBodies, SyncStates, OutboxOps],
-  daos: [AccountDao, FolderDao, MessageDao, OutboxDao],
+  tables: [
+    Accounts,
+    Folders,
+    Messages,
+    MessageBodies,
+    SyncStates,
+    OutboxOps,
+    SendTasks,
+    DraftSyncTasks,
+  ],
+  daos: [
+    AccountDao,
+    FolderDao,
+    MessageDao,
+    OutboxDao,
+    SendTaskDao,
+    DraftSyncTaskDao,
+  ],
 )
 class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 9;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -68,8 +86,7 @@ class AppDatabase extends _$AppDatabase {
       // 针对 IMAP 账户（account_type=2）从既有数据一次性恢复，使会话视图立即可用，
       // 无需重新同步。Gmail(threadId)/Graph(conversationId) 的键无空格、不受影响。
       if (from < 5) {
-        const imapAccounts =
-            'SELECT id FROM accounts WHERE account_type = 2';
+        const imapAccounts = 'SELECT id FROM accounts WHERE account_type = 2';
         // 1) 含内部空格的 References 链 → 取首个 token（线程根 id）。
         await customStatement(
           "UPDATE messages SET thread_key = "
@@ -83,6 +100,22 @@ class AppDatabase extends _$AppDatabase {
           'WHERE account_id IN ($imapAccounts) '
           'AND thread_key IS NULL AND message_id_header IS NOT NULL',
         );
+      }
+      // v6：新增发送队列表（撰写/回复/转发提交的待发送邮件，独立于 outbox_ops）。
+      if (from < 6) {
+        await m.createTable(sendTasks);
+      }
+      // v7：本地草稿记录服务端 draft id，用于覆盖保存与发送现有服务端草稿。
+      if (from < 7) {
+        await m.addColumn(messages, messages.serverDraftId);
+      }
+      // v8：新增草稿同步队列，本地草稿保存后异步同步到服务端草稿箱。
+      if (from < 8) {
+        await m.createTable(draftSyncTasks);
+      }
+      // v9：本地草稿保存密送收件人，避免重新打开草稿时丢失 Bcc。
+      if (from < 9) {
+        await m.addColumn(messages, messages.bccRecipients);
       }
     },
     beforeOpen: (details) async {

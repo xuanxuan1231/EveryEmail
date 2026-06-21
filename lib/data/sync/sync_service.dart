@@ -17,6 +17,7 @@ import '../../domain/models/mail_attachment.dart';
 import '../../domain/models/mailbox_folder.dart';
 import '../../domain/models/message_envelope.dart';
 import '../../domain/models/message_ref.dart';
+import '../../domain/models/outgoing_message.dart';
 import '../auth/oauth_service.dart';
 import '../backends/gmail/gmail_mail_backend.dart';
 import '../backends/graph/graph_mail_backend.dart';
@@ -205,6 +206,120 @@ class SyncService {
     );
   }
 
+  /// 通过账户后端发送一封邮件（撰写/回复/转发 → [SendQueueService] 调用）。
+  ///
+  /// 经账户串行队列执行，与同步/取信/回推互斥，避免并发触碰同一后端连接；
+  /// 连接复用与 OAuth 令牌刷新都走 [_getBackend]。失败向上抛出由发送队列处理重试。
+  Future<void> sendViaBackend(
+    AccountConfig account,
+    OutgoingMessage message,
+  ) async {
+    final backend = await _getBackend(account);
+    await _runOnAccount(account.id, () => backend.sendMessage(message));
+  }
+
+  /// 把一封撰写中的邮件保存为本地草稿。
+  ///
+  /// [draftMessageId] 非空时覆盖更新既有草稿（编辑场景）。返回草稿邮件 id；账户无
+  /// 草稿文件夹时返回 null（调用方提示无法保存）。服务端草稿同步由
+  /// DraftSyncQueueService 异步处理。
+  Future<String?> saveLocalDraft({
+    required String accountId,
+    String? draftMessageId,
+    required OutgoingMessage message,
+  }) async {
+    final folder = await _folderByType(accountId, FolderType.drafts);
+    if (folder == null) return null;
+
+    final id = draftMessageId ?? id_gen.generateId();
+    final draftBit = 1 << MessageFlag.draft.index;
+    final preview = message.text.trim();
+
+    await _db.transaction(() async {
+      await _db.messageDao.upsertMessage(
+        MessagesCompanion.insert(
+          id: id,
+          accountId: accountId,
+          folderId: folder.id,
+          date: DateTime.now(),
+          serverDraftId: Value(message.serverDraftId),
+          subject: Value(message.subject),
+          fromName: Value(message.from.name),
+          fromEmail: Value(message.from.email),
+          toRecipients: Value(_addressesJson(message.to)),
+          ccRecipients: Value(_addressesJson(message.cc)),
+          bccRecipients: Value(_addressesJson(message.bcc)),
+          preview: Value(
+            preview.length > 200 ? preview.substring(0, 200) : preview,
+          ),
+          flagsBitmask: Value(draftBit),
+          hasAttachments: Value(message.attachments.isNotEmpty),
+        ),
+      );
+      await _db.messageDao.upsertBody(
+        MessageBodiesCompanion.insert(
+          messageId: id,
+          plainText: Value(message.text),
+          htmlBody: Value(message.html),
+          fetchState: const Value(BodyFetchState.full),
+          attachmentsMeta: Value(_draftAttachmentsJson(message.attachments)),
+        ),
+      );
+    });
+    return id;
+  }
+
+  /// 保存/更新服务端草稿并返回服务端标识。由草稿同步队列调用。
+  Future<SavedDraft?> saveServerDraft({
+    required String accountId,
+    required OutgoingMessage message,
+  }) async {
+    final account = await accountConfigFor(accountId);
+    final backend = await _getBackend(account);
+    return _runOnAccount(accountId, () => backend.saveDraft(message));
+  }
+
+  String _addressesJson(List<dynamic> addresses) {
+    return jsonEncode([
+      for (final a in addresses)
+        {'email': a.email as String, if (a.name != null) 'name': a.name},
+    ]);
+  }
+
+  /// 草稿附件元数据：复用 MailAttachment 的 JSON 形状（localPath 持有暂存字节路径），
+  /// 恢复草稿时据此重建 OutgoingAttachment。
+  String _draftAttachmentsJson(List<OutgoingAttachment> attachments) {
+    return jsonEncode([
+      for (final att in attachments)
+        {
+          'partId': '',
+          'mimeType': att.mimeType,
+          'filename': att.filename,
+          'size': att.size,
+          'isInline': false,
+          'localPath': att.localPath,
+        },
+    ]);
+  }
+
+  /// 删除本地草稿行。
+  Future<void> deleteLocalDraft({String? draftMessageId}) async {
+    if (draftMessageId != null) {
+      await _db.messageDao.deleteMessages([draftMessageId]);
+    }
+  }
+
+  /// 仅删除服务端草稿。用于 IMAP 草稿发送成功后的远端清理。
+  Future<void> deleteServerDraft({
+    required String accountId,
+    String? serverDraftId,
+  }) async {
+    if (serverDraftId == null || serverDraftId.isEmpty) return;
+    final account = await accountConfigFor(accountId);
+    final backend = await _getBackend(account);
+    await _runOnAccount(accountId, () => backend.deleteDraft(serverDraftId));
+  }
+
   /// 每账户后端访问串行队列：同步、按需取正文、后台预取都经由此队列，
   /// 保证同一账户不并发触碰单条后端连接（IMAP 单 client；enough_mail 的
   /// select-then-fetch 跨调用非原子，并发会选错邮箱）。高优先级（用户点开）
@@ -218,6 +333,14 @@ class SyncService {
 
   /// 每账户合并触发的去抖定时器。
   final Map<String, Timer> _syncDebounce = {};
+
+  /// REST 推送账户（Gmail / Graph）自动同步失败后的延迟重试。
+  final Map<String, Timer> _syncRetryTimers = {};
+  final Map<String, int> _syncRetryAttempts = {};
+
+  /// requestSync 入口触发的同步状态：合并“同步正在跑时又来了推送”的场景。
+  final Set<String> _requestedSyncRunning = {};
+  final Set<String> _requestedSyncPending = {};
 
   /// 在指定账户的串行队列上执行后端操作。
   Future<T> _runOnAccount<T>(
@@ -239,16 +362,101 @@ class SyncService {
   /// 请求一次（去抖 + 串行）账户同步。突发触发场景（FCM 静默数据消息 / IDLE 事件）
   /// 应走这里而非直接 [syncAccount]，避免短时间内重复全量同步。
   void requestSync(AccountConfig account) {
+    final autoRetry = _usesRestPushSync(account);
+    _syncRetryTimers.remove(account.id)?.cancel();
+    if (autoRetry) {
+      _syncRetryAttempts[account.id] = 0;
+    }
     _syncDebounce[account.id]?.cancel();
     _syncDebounce[account.id] = Timer(_syncDebounceWindow, () {
       _syncDebounce.remove(account.id);
-      unawaited(
-        syncAccount(account).catchError((Object e) {
-          debugPrint('requestSync: 同步失败: $e');
-        }),
-      );
+      unawaited(_performRequestedSync(account, autoRetry: autoRetry));
     });
   }
+
+  Future<void> _performRequestedSync(
+    AccountConfig account, {
+    required bool autoRetry,
+  }) async {
+    if (_requestedSyncRunning.contains(account.id)) {
+      _requestedSyncPending.add(account.id);
+      return;
+    }
+
+    _requestedSyncRunning.add(account.id);
+    try {
+      var rerun = true;
+      while (rerun) {
+        _requestedSyncPending.remove(account.id);
+        try {
+          await syncAccount(account);
+          _syncRetryAttempts.remove(account.id);
+        } catch (e) {
+          debugPrint('requestSync: 同步失败: $e');
+          if (autoRetry && _shouldAutoRetrySync(e)) {
+            _scheduleRestSyncRetry(account);
+          }
+          return;
+        }
+        rerun = _requestedSyncPending.remove(account.id);
+      }
+    } finally {
+      _requestedSyncRunning.remove(account.id);
+    }
+  }
+
+  void _scheduleRestSyncRetry(AccountConfig account) {
+    final nextAttempt = (_syncRetryAttempts[account.id] ?? 0) + 1;
+    if (nextAttempt > _restSyncRetryDelays.length) {
+      _syncRetryAttempts.remove(account.id);
+      return;
+    }
+    _syncRetryAttempts[account.id] = nextAttempt;
+    final delay = _restSyncRetryDelays[nextAttempt - 1];
+    _syncRetryTimers.remove(account.id)?.cancel();
+    _syncRetryTimers[account.id] = Timer(delay, () {
+      _syncRetryTimers.remove(account.id);
+      unawaited(_performRequestedSync(account, autoRetry: true));
+    });
+  }
+
+  bool _usesRestPushSync(AccountConfig account) {
+    return account.type == AccountType.gmailOAuth ||
+        account.type == AccountType.microsoftGraph;
+  }
+
+  bool _shouldAutoRetrySync(Object error) {
+    if (_containsAuthFailure(error)) return false;
+    return true;
+  }
+
+  bool _containsAuthFailure(Object error) {
+    if (error is MailAuthException) return true;
+    if (error is MailBackendException && error.cause != null) {
+      return _containsAuthFailure(error.cause!);
+    }
+    final nested = _nestedDioError(error);
+    if (nested != null) return _containsAuthFailure(nested);
+    return false;
+  }
+
+  Object? _nestedDioError(Object error) {
+    try {
+      final dynamic e = error;
+      final Object? nested = e.error as Object?;
+      return nested;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static const List<Duration> _restSyncRetryDelays = [
+    Duration(seconds: 15),
+    Duration(seconds: 45),
+    Duration(minutes: 2),
+    Duration(minutes: 5),
+    Duration(minutes: 10),
+  ];
 
   /// 同步账户：拉取文件夹列表和初始邮件。
   ///
@@ -1286,6 +1494,13 @@ class SyncService {
       t.cancel();
     }
     _syncDebounce.clear();
+    for (final t in _syncRetryTimers.values) {
+      t.cancel();
+    }
+    _syncRetryTimers.clear();
+    _syncRetryAttempts.clear();
+    _requestedSyncRunning.clear();
+    _requestedSyncPending.clear();
     _backendQueues.clear();
     for (final backend in _backends.values) {
       await backend.disconnect();

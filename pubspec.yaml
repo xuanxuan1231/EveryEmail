@@ -66,6 +66,7 @@ dependencies:
   material_symbols_icons: ^4.2928.1
   open_filex: ^4.7.0
   xml: ^6.6.1
+  file_picker: ^12.0.0-beta.2
 
 dev_dependencies:
   flutter_test:

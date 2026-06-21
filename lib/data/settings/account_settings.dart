@@ -20,6 +20,8 @@ class AccountSettings {
     required this.receiveEnabled,
     required this.sendEnabled,
     required this.realtimeSyncEnabled,
+    required this.draftSyncAutoRetry,
+    required this.draftSyncRetryInterval,
     required this.folderSyncScope,
     required this.syncSpamAndTrash,
     required this.notificationsEnabled,
@@ -37,6 +39,8 @@ class AccountSettings {
     receiveEnabled: true,
     sendEnabled: true,
     realtimeSyncEnabled: true,
+    draftSyncAutoRetry: true,
+    draftSyncRetryInterval: Duration(minutes: 5),
     folderSyncScope: AccountFolderSyncScope.standard,
     syncSpamAndTrash: false,
     notificationsEnabled: true,
@@ -53,6 +57,8 @@ class AccountSettings {
   final bool receiveEnabled;
   final bool sendEnabled;
   final bool realtimeSyncEnabled;
+  final bool draftSyncAutoRetry;
+  final Duration draftSyncRetryInterval;
   final AccountFolderSyncScope folderSyncScope;
   final bool syncSpamAndTrash;
   final bool notificationsEnabled;
@@ -69,6 +75,8 @@ class AccountSettings {
     bool? receiveEnabled,
     bool? sendEnabled,
     bool? realtimeSyncEnabled,
+    bool? draftSyncAutoRetry,
+    Duration? draftSyncRetryInterval,
     AccountFolderSyncScope? folderSyncScope,
     bool? syncSpamAndTrash,
     bool? notificationsEnabled,
@@ -91,6 +99,9 @@ class AccountSettings {
       receiveEnabled: receiveEnabled ?? this.receiveEnabled,
       sendEnabled: sendEnabled ?? this.sendEnabled,
       realtimeSyncEnabled: realtimeSyncEnabled ?? this.realtimeSyncEnabled,
+      draftSyncAutoRetry: draftSyncAutoRetry ?? this.draftSyncAutoRetry,
+      draftSyncRetryInterval:
+          draftSyncRetryInterval ?? this.draftSyncRetryInterval,
       folderSyncScope: folderSyncScope ?? this.folderSyncScope,
       syncSpamAndTrash: syncSpamAndTrash ?? this.syncSpamAndTrash,
       notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
@@ -137,6 +148,8 @@ class AccountSettings {
             receiveEnabled == other.receiveEnabled &&
             sendEnabled == other.sendEnabled &&
             realtimeSyncEnabled == other.realtimeSyncEnabled &&
+            draftSyncAutoRetry == other.draftSyncAutoRetry &&
+            draftSyncRetryInterval == other.draftSyncRetryInterval &&
             folderSyncScope == other.folderSyncScope &&
             syncSpamAndTrash == other.syncSpamAndTrash &&
             notificationsEnabled == other.notificationsEnabled &&
@@ -155,6 +168,8 @@ class AccountSettings {
     receiveEnabled,
     sendEnabled,
     realtimeSyncEnabled,
+    draftSyncAutoRetry,
+    draftSyncRetryInterval,
     folderSyncScope,
     syncSpamAndTrash,
     notificationsEnabled,
@@ -168,6 +183,15 @@ class AccountSettings {
 /// 账户级偏好持久化。
 class AccountSettingsStore {
   const AccountSettingsStore._();
+
+  static const List<Duration> draftSyncRetryIntervalChoices = [
+    Duration(minutes: 1),
+    Duration(minutes: 5),
+    Duration(minutes: 10),
+    Duration(minutes: 15),
+    Duration(minutes: 30),
+    Duration(hours: 1),
+  ];
 
   static String _key(String accountId, String name) =>
       'account.$accountId.$name';
@@ -203,6 +227,16 @@ class AccountSettingsStore {
       realtimeSyncEnabled:
           prefs.getBool(_key(accountId, 'realtimeSyncEnabled')) ??
           AccountSettings.defaults.realtimeSyncEnabled,
+      draftSyncAutoRetry:
+          prefs.getBool(_key(accountId, 'draftSyncAutoRetry')) ??
+          AccountSettings.defaults.draftSyncAutoRetry,
+      draftSyncRetryInterval: _normalizeDraftSyncRetryInterval(
+        Duration(
+          seconds:
+              prefs.getInt(_key(accountId, 'draftSyncRetryIntervalSeconds')) ??
+              AccountSettings.defaults.draftSyncRetryInterval.inSeconds,
+        ),
+      ),
       folderSyncScope: _parseFolderSyncScope(
         prefs.getString(_key(accountId, 'folderSyncScope')),
       ),
@@ -273,6 +307,16 @@ class AccountSettingsStore {
       _key(accountId, 'realtimeSyncEnabled'),
       settings.realtimeSyncEnabled,
     );
+    await prefs.setBool(
+      _key(accountId, 'draftSyncAutoRetry'),
+      settings.draftSyncAutoRetry,
+    );
+    await prefs.setInt(
+      _key(accountId, 'draftSyncRetryIntervalSeconds'),
+      _normalizeDraftSyncRetryInterval(
+        settings.draftSyncRetryInterval,
+      ).inSeconds,
+    );
     await prefs.setString(
       _key(accountId, 'folderSyncScope'),
       _encodeFolderSyncScope(settings.folderSyncScope),
@@ -314,7 +358,10 @@ class AccountSettingsStore {
   static Future<void> clear(String accountId) async {
     final prefs = await SharedPreferences.getInstance();
     final prefix = 'account.$accountId.';
-    final keys = prefs.getKeys().where((key) => key.startsWith(prefix)).toList();
+    final keys = prefs
+        .getKeys()
+        .where((key) => key.startsWith(prefix))
+        .toList();
     for (final key in keys) {
       await prefs.remove(key);
     }
@@ -330,6 +377,14 @@ class AccountSettingsStore {
     final trimmed = raw?.trim();
     if (trimmed == null || trimmed.isEmpty) return null;
     return trimmed;
+  }
+
+  static Duration _normalizeDraftSyncRetryInterval(Duration interval) {
+    const min = Duration(minutes: 1);
+    const max = Duration(hours: 1);
+    if (interval < min) return min;
+    if (interval > max) return max;
+    return interval;
   }
 
   static AccountAvatarMode _parseAvatarMode(

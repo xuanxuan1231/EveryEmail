@@ -12,7 +12,9 @@ import '../../../domain/models/mailbox_folder.dart';
 import '../../../domain/models/message_envelope.dart';
 import '../../../domain/models/message_ref.dart';
 import '../../../domain/models/mime_content.dart';
+import '../../../domain/models/outgoing_message.dart';
 import '../mail_backend.dart';
+import '../outgoing_mime.dart';
 import '../sync_types.dart';
 import '../token_provider.dart';
 import 'gmail_batch.dart';
@@ -30,6 +32,9 @@ class GmailApiBackend implements MailBackend {
         BaseOptions(
           baseUrl: 'https://gmail.googleapis.com/gmail/v1/users/me',
           headers: {'Content-Type': 'application/json'},
+          connectTimeout: const Duration(seconds: 12),
+          sendTimeout: const Duration(seconds: 20),
+          receiveTimeout: const Duration(seconds: 20),
           // Gmail 期望重复键（historyTypes=a&historyTypes=b），dio 默认的
           // multiCompatible 会编码成 historyTypes[]=a，Gmail 不接受。
           listFormat: ListFormat.multi,
@@ -446,6 +451,71 @@ class GmailApiBackend implements MailBackend {
     // Gmail 走 FCM 推送（users.watch + Pub/Sub），不在客户端轮询/IDLE。
     // supportsIdle=false 时上层不会调用这里，返回空流即可。
     return const Stream.empty();
+  }
+
+  @override
+  Future<void> sendMessage(OutgoingMessage message) async {
+    try {
+      final draft = await _createOrUpdateDraft(message);
+      await _retry(
+        () => _dio.post('/drafts/send', data: {'id': draft.draftId}),
+      );
+    } on DioException catch (e) {
+      throw MailBackendException('Gmail 发送失败', cause: e);
+    }
+  }
+
+  @override
+  Future<SavedDraft?> saveDraft(OutgoingMessage message) async {
+    try {
+      return _createOrUpdateDraft(message);
+    } on DioException catch (e) {
+      throw MailBackendException('Gmail 保存草稿失败', cause: e);
+    }
+  }
+
+  @override
+  Future<void> deleteDraft(String draftId) async {
+    if (draftId.isEmpty) return;
+    try {
+      await _retry(() => _dio.delete('/drafts/$draftId'));
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404) return;
+      throw MailBackendException('Gmail 删除草稿失败', cause: e);
+    }
+  }
+
+  Future<SavedDraft> _createOrUpdateDraft(OutgoingMessage message) async {
+    final mime = await buildOutgoingMime(message);
+    final rfc822 = mime.renderMessage();
+    final response = await _retry(
+      () => _uploadDraft(rfc822, draftId: message.serverDraftId),
+    );
+    final data = (response.data as Map).cast<String, dynamic>();
+    return _savedDraftFromGmail(data);
+  }
+
+  Future<Response<dynamic>> _uploadDraft(String rfc822, {String? draftId}) {
+    final path = draftId == null
+        ? 'https://gmail.googleapis.com/upload/gmail/v1/users/me/drafts'
+        : 'https://gmail.googleapis.com/upload/gmail/v1/users/me/drafts/$draftId';
+    final uri = Uri.parse(
+      path,
+    ).replace(queryParameters: {'uploadType': 'media'});
+    final options = Options(headers: {'Content-Type': 'message/rfc822'});
+    if (draftId == null) {
+      return _dio.postUri(uri, data: rfc822, options: options);
+    }
+    return _dio.putUri(uri, data: rfc822, options: options);
+  }
+
+  SavedDraft _savedDraftFromGmail(Map<String, dynamic> data) {
+    final message = (data['message'] as Map?)?.cast<String, dynamic>();
+    return SavedDraft(
+      draftId: data['id'] as String,
+      messageId: message?['id'] as String?,
+      threadId: message?['threadId'] as String?,
+    );
   }
 
   /// 批量改标签：一次请求改多封（messages.batchModify，≤1000 id）。

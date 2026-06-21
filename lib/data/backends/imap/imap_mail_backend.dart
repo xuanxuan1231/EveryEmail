@@ -10,7 +10,9 @@ import '../../../domain/models/mailbox_folder.dart';
 import '../../../domain/models/message_envelope.dart';
 import '../../../domain/models/message_ref.dart';
 import '../../../domain/models/mime_content.dart';
+import '../../../domain/models/outgoing_message.dart';
 import '../mail_backend.dart';
+import '../outgoing_mime.dart';
 import '../sync_types.dart';
 import '../token_provider.dart';
 import 'imap_thread_key.dart';
@@ -563,10 +565,111 @@ class ImapMailBackend implements MailBackend {
   }
 
   @override
+  Future<void> sendMessage(OutgoingMessage message) async {
+    final client = _client;
+    if (client == null) throw const MailBackendException('未连接');
+    try {
+      final mime = await buildOutgoingMime(message);
+      // appendToSent：服务端不自动归档时由 enough_mail APPEND 到「已发送」。
+      await client.sendMessage(mime, appendToSent: true);
+    } on em.MailException catch (e) {
+      throw MailBackendException('发送失败: ${e.message}', cause: e);
+    }
+  }
+
+  @override
+  Future<SavedDraft?> saveDraft(OutgoingMessage message) async {
+    final client = _client;
+    if (client == null) throw const MailBackendException('未连接');
+    try {
+      final draftsMailbox = _draftsMailbox(client);
+      if (draftsMailbox == null) return null;
+
+      final oldDraft = _parseImapDraftId(message.serverDraftId);
+      final mime = await buildOutgoingMime(message);
+      final appended = await client.saveDraftMessage(
+        mime,
+        draftsMailbox: draftsMailbox,
+      );
+      final appendedUids = appended?.targetSequence.toList() ?? const <int>[];
+      final uid = appendedUids.isEmpty ? null : appendedUids.first;
+      final uidValidity = appended?.uidValidity;
+      if (uid == null || uidValidity == null) {
+        return null;
+      }
+
+      if (oldDraft != null) {
+        await _deleteDraftUid(client, draftsMailbox, uid: oldDraft.uid);
+      }
+
+      return SavedDraft(
+        draftId: _imapDraftId(uidValidity: uidValidity, uid: uid),
+        messageId: uid.toString(),
+        folderId: draftsMailbox.path,
+      );
+    } on em.MailException catch (e) {
+      throw MailBackendException('保存草稿失败: ${e.message}', cause: e);
+    }
+  }
+
+  @override
+  Future<void> deleteDraft(String draftId) async {
+    final client = _client;
+    if (client == null) throw const MailBackendException('未连接');
+    final draft = _parseImapDraftId(draftId);
+    if (draft == null) return;
+    final draftsMailbox = _draftsMailbox(client);
+    if (draftsMailbox == null) return;
+    try {
+      await _deleteDraftUid(client, draftsMailbox, uid: draft.uid);
+    } on em.MailException catch (e) {
+      throw MailBackendException('删除草稿失败: ${e.message}', cause: e);
+    }
+  }
+
+  em.Mailbox? _draftsMailbox(em.MailClient client) {
+    final mailboxes = client.mailboxes;
+    if (mailboxes == null) return null;
+    for (final mailbox in mailboxes) {
+      if (mailbox.isDrafts) return mailbox;
+    }
+    for (final mailbox in mailboxes) {
+      final name = mailbox.name.toLowerCase();
+      final path = mailbox.path.toLowerCase();
+      if (name.contains('draft') || path.contains('draft')) return mailbox;
+    }
+    return null;
+  }
+
+  Future<void> _deleteDraftUid(
+    em.MailClient client,
+    em.Mailbox draftsMailbox, {
+    required int uid,
+  }) async {
+    await client.selectMailbox(draftsMailbox);
+    final sequence = em.MessageSequence.fromId(uid, isUid: true);
+    await client.store(sequence, [
+      em.MessageFlags.deleted,
+    ], action: em.StoreAction.add);
+  }
+
+  String _imapDraftId({required int uidValidity, required int uid}) =>
+      '$uidValidity:$uid';
+
+  ({int uidValidity, int uid})? _parseImapDraftId(String? raw) {
+    if (raw == null || raw.isEmpty) return null;
+    final parts = raw.split(':');
+    if (parts.length != 2) return null;
+    final uidValidity = int.tryParse(parts[0]);
+    final uid = int.tryParse(parts[1]);
+    if (uidValidity == null || uid == null) return null;
+    return (uidValidity: uidValidity, uid: uid);
+  }
+
+  @override
   Stream<MailboxEvent> watch(MailboxFolder folder) {
     final client = _client;
     if (client == null) throw const MailBackendException('未连接');
-
     // 真 IDLE：MailClient.startPolling() 在服务端支持时使用 IMAP IDLE，
     // 通过 eventBus 派发新邮件/标志变更/过期/重连事件，映射到 MailboxEvent。
     final controller = StreamController<MailboxEvent>();

@@ -115,6 +115,9 @@ class Messages extends Table {
   /// Gmail：REST API 的 message id（全邮箱唯一）。
   TextColumn get gmailMessageId => text().nullable()();
 
+  /// 服务端草稿 id：Gmail draft id / Graph draft message id。
+  TextColumn get serverDraftId => text().nullable()();
+
   // —— 信封字段 ——
   TextColumn get subject => text().withDefault(const Constant(''))();
   TextColumn get fromName => text().nullable()();
@@ -123,6 +126,7 @@ class Messages extends Table {
   /// 收件人/抄送，JSON 数组字符串（[{name,email}]）。
   TextColumn get toRecipients => text().withDefault(const Constant('[]'))();
   TextColumn get ccRecipients => text().withDefault(const Constant('[]'))();
+  TextColumn get bccRecipients => text().withDefault(const Constant('[]'))();
 
   DateTimeColumn get date => dateTime()();
 
@@ -233,4 +237,75 @@ class OutboxOps extends Table {
   DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
 
   // 注：使用 autoIncrement() 的列会自动成为主键，无需重写 primaryKey。
+}
+
+/// 发送队列：撰写页提交的待发送邮件。
+///
+/// 刻意独立于 [OutboxOps]——后者只承载针对**既有邮件**的轻量回推（已读/移动/删除）。
+/// 发送任务携带完整邮件载荷（序列化的 OutgoingMessage），有独立的重试与「失败需
+/// 用户关注」语义；UI 在主界面顶栏对失败任务做醒目红点提示。
+class SendTasks extends Table {
+  /// 内部稳定主键（UUID）。
+  TextColumn get id => text()();
+
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+
+  /// 序列化的 OutgoingMessage（JSON）。
+  TextColumn get payload => text()();
+
+  /// 任务状态（queued / sending / failed）。
+  IntColumn get status => intEnum<SendTaskStatus>().withDefault(
+    Constant(SendTaskStatus.queued.index),
+  )();
+
+  /// 已尝试次数。
+  IntColumn get attempts => integer().withDefault(const Constant(0))();
+
+  TextColumn get lastError => text().nullable()();
+
+  /// 关联的本地草稿邮件 id（若由草稿发送），发送成功后一并删除。
+  TextColumn get draftMessageId => text().nullable()();
+
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+  DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+/// 草稿同步队列：本地草稿先落库，再异步同步到服务端草稿箱。
+class DraftSyncTasks extends Table {
+  TextColumn get id => text()();
+
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+
+  /// save / delete。
+  TextColumn get opType => text()();
+
+  /// 关联本地草稿 id。删除任务可能为空（只清理服务端草稿）。
+  TextColumn get draftMessageId => text().nullable()();
+
+  /// 序列化的 OutgoingMessage（save 任务使用）。
+  TextColumn get payload => text().nullable()();
+
+  /// 服务端草稿 id（delete 任务使用；save 任务用于覆盖旧草稿）。
+  TextColumn get serverDraftId => text().nullable()();
+
+  IntColumn get status => intEnum<DraftSyncTaskStatus>().withDefault(
+    Constant(DraftSyncTaskStatus.queued.index),
+  )();
+
+  IntColumn get attempts => integer().withDefault(const Constant(0))();
+
+  TextColumn get lastError => text().nullable()();
+
+  DateTimeColumn get nextAttemptAt => dateTime().nullable()();
+
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+  DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  Set<Column> get primaryKey => {id};
 }

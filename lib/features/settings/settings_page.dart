@@ -245,53 +245,65 @@ class SettingsPage extends ConsumerWidget {
       context: context,
       showDragHandle: true,
       useSafeArea: true,
+      isScrollControlled: true,
       builder: (context) {
         final theme = Theme.of(context);
         final colors = theme.colorScheme;
+        final maxHeight = MediaQuery.sizeOf(context).height * 0.75;
 
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                title,
-                style: theme.textTheme.headlineSmall?.copyWith(
-                  color: colors.onSurface,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0,
+        return ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: maxHeight),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  title,
+                  style: theme.textTheme.headlineSmall?.copyWith(
+                    color: colors.onSurface,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 16),
-              Material(
-                color: colors.surfaceContainerHigh,
-                clipBehavior: Clip.antiAlias,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(24),
+                const SizedBox(height: 16),
+                Flexible(
+                  child: Material(
+                    color: colors.surfaceContainerHigh,
+                    clipBehavior: Clip.antiAlias,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(24),
+                    ),
+                    child: ListView.separated(
+                      shrinkWrap: true,
+                      padding: EdgeInsets.zero,
+                      itemCount: choices.length,
+                      separatorBuilder: (_, _) => const _SectionDivider(),
+                      itemBuilder: (context, index) {
+                        final choice = choices[index];
+                        return _SettingsTile(
+                          icon: choice.icon,
+                          iconColor: choice.iconColor ?? colors.primary,
+                          title: choice.title,
+                          subtitle: choice.subtitle,
+                          trailing: choice.value == selected
+                              ? Icon(
+                                  Symbols.check_rounded,
+                                  color: colors.primary,
+                                )
+                              : null,
+                          onTap: () {
+                            Navigator.of(context).pop();
+                            onSelected(choice.value);
+                          },
+                        );
+                      },
+                    ),
+                  ),
                 ),
-                child: Column(
-                  children: [
-                    for (var index = 0; index < choices.length; index++) ...[
-                      if (index > 0) const _SectionDivider(),
-                      _SettingsTile(
-                        icon: choices[index].icon,
-                        iconColor: choices[index].iconColor ?? colors.primary,
-                        title: choices[index].title,
-                        subtitle: choices[index].subtitle,
-                        trailing: choices[index].value == selected
-                            ? Icon(Symbols.check_rounded, color: colors.primary)
-                            : null,
-                        onTap: () {
-                          Navigator.of(context).pop();
-                          onSelected(choices[index].value);
-                        },
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         );
       },
@@ -1412,6 +1424,70 @@ class AccountSettingsPage extends ConsumerWidget {
                             },
                           ),
                           _SettingsTile(
+                            icon: Symbols.drafts,
+                            iconColor: colors.secondary,
+                            title: '草稿自动重试',
+                            subtitle: '本地草稿保存后自动同步到服务端草稿箱',
+                            trailing: Switch(
+                              value: settings.draftSyncAutoRetry,
+                              onChanged: (enabled) {
+                                unawaited(
+                                  ref
+                                      .read(
+                                        accountSettingsProvider(
+                                          account.id,
+                                        ).notifier,
+                                      )
+                                      .setDraftSyncAutoRetry(enabled),
+                                );
+                                if (enabled) {
+                                  unawaited(
+                                    ref
+                                        .read(draftSyncQueueServiceProvider)
+                                        .processQueue(),
+                                  );
+                                }
+                              },
+                            ),
+                            onTap: () {
+                              final enabled = !settings.draftSyncAutoRetry;
+                              unawaited(
+                                ref
+                                    .read(
+                                      accountSettingsProvider(
+                                        account.id,
+                                      ).notifier,
+                                    )
+                                    .setDraftSyncAutoRetry(enabled),
+                              );
+                              if (enabled) {
+                                unawaited(
+                                  ref
+                                      .read(draftSyncQueueServiceProvider)
+                                      .processQueue(),
+                                );
+                              }
+                            },
+                          ),
+                          _SettingsTile(
+                            icon: Symbols.timer,
+                            iconColor: colors.secondary,
+                            title: '草稿重试间隔',
+                            subtitle: '草稿同步失败后再次自动尝试',
+                            enabled: settings.draftSyncAutoRetry,
+                            trailingLabel: _pollingIntervalLabel(
+                              settings.draftSyncRetryInterval,
+                            ),
+                            onTap: settings.draftSyncAutoRetry
+                                ? () => _showDraftRetryIntervalSheet(
+                                    context,
+                                    ref,
+                                    account.id,
+                                    settings.draftSyncRetryInterval,
+                                  )
+                                : null,
+                          ),
+                          _SettingsTile(
                             icon: Symbols.sync,
                             iconColor: colors.secondary,
                             title: '实时同步',
@@ -1832,6 +1908,65 @@ class AccountSettingsPage extends ConsumerWidget {
               .read(imapRealtimeSettingsProvider(accountId).notifier)
               .setPollingInterval(interval),
         );
+      },
+    );
+  }
+
+  static void _showDraftRetryIntervalSheet(
+    BuildContext context,
+    WidgetRef ref,
+    String accountId,
+    Duration selected,
+  ) {
+    SettingsPage._showChoiceSheet<Duration>(
+      context: context,
+      title: '草稿重试间隔',
+      selected: selected,
+      choices: const [
+        _SettingsChoice(
+          value: Duration(minutes: 1),
+          icon: Symbols.speed,
+          title: '1 分钟',
+          subtitle: '更快同步，网络异常时更频繁尝试',
+        ),
+        _SettingsChoice(
+          value: Duration(minutes: 5),
+          icon: Symbols.timer,
+          title: '5 分钟',
+          subtitle: '默认间隔，兼顾及时性和耗电',
+        ),
+        _SettingsChoice(
+          value: Duration(minutes: 10),
+          icon: Symbols.timer,
+          title: '10 分钟',
+          subtitle: '适合一般后台重试',
+        ),
+        _SettingsChoice(
+          value: Duration(minutes: 15),
+          icon: Symbols.schedule,
+          title: '15 分钟',
+          subtitle: '减少网络请求',
+        ),
+        _SettingsChoice(
+          value: Duration(minutes: 30),
+          icon: Symbols.schedule,
+          title: '30 分钟',
+          subtitle: '适合低频账户',
+        ),
+        _SettingsChoice(
+          value: Duration(hours: 1),
+          icon: Symbols.battery_saver,
+          title: '1 小时',
+          subtitle: '最少自动尝试',
+        ),
+      ],
+      onSelected: (interval) {
+        unawaited(
+          ref
+              .read(accountSettingsProvider(accountId).notifier)
+              .setDraftSyncRetryInterval(interval),
+        );
+        unawaited(ref.read(draftSyncQueueServiceProvider).processQueue());
       },
     );
   }

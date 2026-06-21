@@ -4,6 +4,9 @@ import '../domain/enums/account_enums.dart';
 import '../domain/models/account_config.dart';
 import '../data/local/database/app_database.dart';
 import '../features/home/home_page.dart';
+import '../features/compose/compose_args.dart';
+import '../features/compose/compose_page.dart';
+import '../features/compose/send_queue_page.dart';
 import '../features/message/message_detail_page.dart';
 import '../features/search/search_page.dart';
 import '../features/settings/settings_page.dart';
@@ -19,6 +22,14 @@ final GoRouter appRouter = GoRouter(
   initialLocation: '/',
   routes: <RouteBase>[
     GoRoute(path: '/', builder: (context, state) => const HomePage()),
+
+    // 撰写邮件（新邮件 / 回复 / 转发 / 编辑草稿共用，参数经 extra 传入）。
+    GoRoute(
+      path: '/compose',
+      builder: (context, state) => ComposePage(
+        args: state.extra is ComposeArgs ? state.extra! as ComposeArgs : null,
+      ),
+    ),
 
     // 邮件详情
     GoRoute(
@@ -38,6 +49,12 @@ final GoRouter appRouter = GoRouter(
 
     // 搜索
     GoRoute(path: '/search', builder: (context, state) => const SearchPage()),
+
+    // 发送队列
+    GoRoute(
+      path: '/send-queue',
+      builder: (context, state) => const SendQueuePage(),
+    ),
 
     // 设置
     GoRoute(
