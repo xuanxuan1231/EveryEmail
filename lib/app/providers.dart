@@ -180,10 +180,19 @@ final workerSettingsProvider =
     });
 
 class WorkerSettingsController extends StateNotifier<WorkerSettings> {
-  WorkerSettingsController(super.initial, {this.onWorkerBaseUrlChanging});
+  WorkerSettingsController(
+    super.initial, {
+    this.onWorkerBaseUrlChanging,
+    this.onWorkerBaseUrlChanged,
+  });
 
+  /// 地址提交前回调：在旧地址上拆除推送、在新地址上重建（迁移）。
   final Future<void> Function(String oldUrl, String newUrl)?
   onWorkerBaseUrlChanging;
+
+  /// 地址写入后回调：此时依赖 [workerSettingsProvider] 的 provider 已指向新地址，
+  /// 用于把续订定时器重新挂回重建出的长生命周期 [WebhookManager]。
+  final Future<void> Function()? onWorkerBaseUrlChanged;
 
   Future<void> setWorkerBaseUrl(String value) async {
     final normalized = WorkerSettings.normalizeWorkerBaseUrl(value);
@@ -195,6 +204,8 @@ class WorkerSettingsController extends StateNotifier<WorkerSettings> {
     final settings = state.copyWith(workerBaseUrl: normalized);
     state = settings;
     await WorkerSettingsStore.write(settings);
+
+    await onWorkerBaseUrlChanged?.call();
   }
 }
 

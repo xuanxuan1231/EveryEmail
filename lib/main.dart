@@ -36,6 +36,11 @@ Future<void> main() async {
             onWorkerBaseUrlChanging: (oldUrl, newUrl) => ref
                 .read(workerMigrationServiceProvider)
                 .migrateWorkerBaseUrl(oldUrl: oldUrl, newUrl: newUrl),
+            // 地址已切换：读一次重建出的 WebhookManager，把 Graph 续订定时器挂回去
+            // （Graph 续订靠客户端定时器驱动；Gmail 由 Worker Cron 续订，无需在此处理）。
+            onWorkerBaseUrlChanged: () => ref
+                .read(webhookManagerProvider)
+                .enableForAllMicrosoftAccounts(),
           ),
         ),
       ],
