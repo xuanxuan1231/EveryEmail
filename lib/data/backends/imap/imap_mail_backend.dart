@@ -539,6 +539,35 @@ class ImapMailBackend implements MailBackend {
   }
 
   @override
+  Future<void> archive(List<MessageRef> refs) async {
+    final client = _client;
+    if (client == null) throw const MailBackendException('未连接');
+
+    final mailboxes = client.mailboxes;
+    if (mailboxes == null) {
+      throw const MailBackendException('邮箱列表未加载');
+    }
+
+    final archiveMailbox = mailboxes.firstWhere(
+      (mb) => mb.isArchive,
+      orElse: () => throw const MailBackendException('归档文件夹不存在'),
+    );
+
+    for (final ref in refs) {
+      if (ref is! ImapRef) continue;
+
+      final sourceMailbox = mailboxes.firstWhere(
+        (mb) => mb.path == ref.folderPath,
+        orElse: () => throw MailBackendException('文件夹不存在: ${ref.folderPath}'),
+      );
+      await client.selectMailbox(sourceMailbox);
+
+      final sequence = em.MessageSequence.fromId(ref.uid, isUid: true);
+      await client.moveMessages(sequence, archiveMailbox);
+    }
+  }
+
+  @override
   Future<void> delete(List<MessageRef> refs) async {
     final client = _client;
     if (client == null) throw const MailBackendException('未连接');
@@ -565,11 +594,15 @@ class ImapMailBackend implements MailBackend {
   }
 
   @override
-  Future<void> sendMessage(OutgoingMessage message) async {
+  Future<void> sendMessage(
+    OutgoingMessage message, {
+    Future<void> Function(String serverDraftId)? onDraftPersisted,
+  }) async {
     final client = _client;
     if (client == null) throw const MailBackendException('未连接');
     try {
       final mime = await buildOutgoingMime(message);
+      // SMTP 直发、无服务端草稿，故不回调 onDraftPersisted。
       // appendToSent：服务端不自动归档时由 enough_mail APPEND 到「已发送」。
       await client.sendMessage(mime, appendToSent: true);
     } on em.MailException catch (e) {

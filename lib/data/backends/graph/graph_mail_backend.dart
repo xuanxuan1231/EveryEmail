@@ -24,21 +24,25 @@ import '../token_provider.dart';
 /// - /me/messages - 邮件查询
 /// - /me/mailFolders/{id}/messages/delta - 增量同步
 class GraphMailBackend implements MailBackend {
-  GraphMailBackend({required this.account, required this.tokenProvider})
-    : _dio = Dio(
-        BaseOptions(
-          baseUrl: 'https://graph.microsoft.com/v1.0',
-          headers: {'Content-Type': 'application/json'},
-          connectTimeout: const Duration(seconds: 12),
-          sendTimeout: const Duration(seconds: 20),
-          receiveTimeout: const Duration(seconds: 20),
-        ),
-      ) {
+  GraphMailBackend({
+    required this.account,
+    required this.tokenProvider,
+    String baseUrl = 'https://graph.microsoft.com/v1.0',
+  }) : _dio = Dio(
+         BaseOptions(
+           baseUrl: baseUrl,
+           headers: {'Content-Type': 'application/json'},
+           connectTimeout: const Duration(seconds: 12),
+           sendTimeout: const Duration(seconds: 20),
+           receiveTimeout: const Duration(seconds: 20),
+         ),
+       ) {
     // 添加认证拦截器
     _dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (options, handler) async {
           try {
+            options.headers['Prefer'] = _immutableIdPreferHeader;
             final token = await tokenProvider();
             options.headers['Authorization'] = 'Bearer $token';
             handler.next(options);
@@ -71,6 +75,8 @@ class GraphMailBackend implements MailBackend {
   final AccountConfig account;
   final AccessTokenProvider tokenProvider;
   final Dio _dio;
+
+  static const String _immutableIdPreferHeader = 'IdType="ImmutableId"';
 
   @override
   AccountType get type => AccountType.microsoftGraph;
@@ -371,6 +377,19 @@ class GraphMailBackend implements MailBackend {
   }
 
   @override
+  Future<void> archive(List<MessageRef> refs) async {
+    for (final ref in refs) {
+      if (ref is! GraphRef) continue;
+      await _retry(
+        () => _dio.post(
+          '/me/messages/${ref.messageId}/move',
+          data: {'destinationId': 'archive'},
+        ),
+      );
+    }
+  }
+
+  @override
   Future<void> delete(List<MessageRef> refs) async {
     for (final ref in refs) {
       if (ref is! GraphRef) continue;
@@ -379,13 +398,26 @@ class GraphMailBackend implements MailBackend {
   }
 
   @override
-  Future<void> sendMessage(OutgoingMessage message) async {
+  Future<void> sendMessage(
+    OutgoingMessage message, {
+    Future<void> Function(String serverDraftId)? onDraftPersisted,
+  }) async {
+    final existingDraftId = message.serverDraftId;
+    final updatingExisting =
+        existingDraftId != null && existingDraftId.isNotEmpty;
     SavedDraft? draft;
     try {
       draft = await _createOrUpdateDraft(message);
+      // 新建草稿成功：回写 draftId，使发送失败后的重试复用同一草稿（避免孤儿草稿）。
+      if (!updatingExisting) {
+        await onDraftPersisted?.call(draft.draftId);
+      }
       await _retry(() => _dio.post('/me/messages/${draft!.draftId}/send'));
     } on DioException catch (e) {
-      if (draft != null && await _draftNoLongerExists(draft.draftId)) {
+      // 幂等：草稿已不存在（已被发送消费）→ 视为已发送，避免重复投递/孤儿草稿。发送阶段
+      // 失败时探 draft.draftId；更新既有草稿阶段就失败（draft 未赋值）时退回探 existingDraftId。
+      final probeId = draft?.draftId ?? existingDraftId;
+      if (probeId != null && await _draftNoLongerExists(probeId)) {
         return;
       }
       throw MailBackendException(_graphDioMessage('Graph 发送失败', e), cause: e);

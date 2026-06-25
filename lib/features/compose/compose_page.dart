@@ -803,6 +803,12 @@ class _ComposePageState extends ConsumerState<ComposePage> {
       await ref
           .read(syncServiceProvider)
           .deleteLocalDraft(draftMessageId: _args.draftMessageId);
+      // 清理本地暂存附件，避免 outgoing/ 目录残留泄漏（草稿被丢弃后这些副本无人持有）。
+      for (final att in _attachments) {
+        try {
+          await _deleteAttachmentFile(att);
+        } catch (_) {}
+      }
       _toast('已删除草稿');
       return true;
     } catch (e) {

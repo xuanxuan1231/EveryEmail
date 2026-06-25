@@ -84,6 +84,36 @@ void main() {
     expect(all.every((t) => t.status == SendTaskStatus.queued), isTrue);
   });
 
+  test('requeueFailedUnder 只重排未达尝试上限的 failed', () async {
+    await insert('low', status: SendTaskStatus.failed);
+    await insert('high', status: SendTaskStatus.failed);
+    for (var i = 0; i < 5; i++) {
+      await db.sendTaskDao.incrementAttempts('high');
+    }
+
+    await db.sendTaskDao.requeueFailedUnder(5);
+
+    // 未达上限：重排为 queued；已达上限：保持 failed，留待手动重试。
+    expect(
+      (await db.sendTaskDao.getTask('low'))!.status,
+      SendTaskStatus.queued,
+    );
+    expect(
+      (await db.sendTaskDao.getTask('high'))!.status,
+      SendTaskStatus.failed,
+    );
+  });
+
+  test('updatePayload 覆盖任务载荷', () async {
+    await insert('t1');
+    await db.sendTaskDao.updatePayload(
+      't1',
+      '{"id":"t1","serverDraftId":"d-99"}',
+    );
+    final task = await db.sendTaskDao.getTask('t1');
+    expect(task!.payload, contains('d-99'));
+  });
+
   test('incrementAttempts 累加，remove 删除', () async {
     await insert('t1');
     await db.sendTaskDao.incrementAttempts('t1');

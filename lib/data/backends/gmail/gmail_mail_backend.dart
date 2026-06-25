@@ -438,6 +438,13 @@ class GmailApiBackend implements MailBackend {
   }
 
   @override
+  Future<void> archive(List<MessageRef> refs) async {
+    final ids = _gmailIds(refs);
+    if (ids.isEmpty) return;
+    await _batchModify(ids, add: const [], remove: const ['INBOX']);
+  }
+
+  @override
   Future<void> delete(List<MessageRef> refs) async {
     // Gmail「删除」语义=移到废纸篓（与 IMAP \Deleted / Graph 删到 deleteditems 一致）。
     // 无批量 trash 端点，逐封调用（已带重试）。
@@ -454,13 +461,30 @@ class GmailApiBackend implements MailBackend {
   }
 
   @override
-  Future<void> sendMessage(OutgoingMessage message) async {
+  Future<void> sendMessage(
+    OutgoingMessage message, {
+    Future<void> Function(String serverDraftId)? onDraftPersisted,
+  }) async {
+    final existingDraftId = message.serverDraftId;
+    final updatingExisting =
+        existingDraftId != null && existingDraftId.isNotEmpty;
+    final SavedDraft draft;
     try {
-      final draft = await _createOrUpdateDraft(message);
-      await _retry(
-        () => _dio.post('/drafts/send', data: {'id': draft.draftId}),
-      );
+      draft = await _createOrUpdateDraft(message);
     } on DioException catch (e) {
+      // 更新既有草稿返回 404：草稿已被发送消费（上次发送其实已成功）→ 幂等，视为已发送。
+      if (updatingExisting && e.response?.statusCode == 404) return;
+      throw MailBackendException('Gmail 发送失败', cause: e);
+    }
+    // 新建草稿成功：立即回写 draftId，使发送阶段失败后的重试复用同一草稿（避免孤儿草稿）。
+    if (!updatingExisting) {
+      await onDraftPersisted?.call(draft.draftId);
+    }
+    try {
+      await _retry(() => _dio.post('/drafts/send', data: {'id': draft.draftId}));
+    } on DioException catch (e) {
+      // 草稿在发送前已消失：上次发送可能已成功 → 幂等返回，避免重复投递。
+      if (e.response?.statusCode == 404) return;
       throw MailBackendException('Gmail 发送失败', cause: e);
     }
   }

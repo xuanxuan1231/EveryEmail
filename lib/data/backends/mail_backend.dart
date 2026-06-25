@@ -58,6 +58,11 @@ abstract interface class MailBackend {
   /// 移动到目标文件夹。
   Future<void> moveToFolder(List<MessageRef> refs, MailboxFolder target);
 
+  /// 归档邮件。
+  ///
+  /// Gmail 语义是移除 `INBOX` 标签；Graph/IMAP 语义是移动到服务端归档文件夹。
+  Future<void> archive(List<MessageRef> refs);
+
   /// 删除（移到废纸篓或永久删除，由实现决定语义）。
   Future<void> delete(List<MessageRef> refs);
 
@@ -65,7 +70,15 @@ abstract interface class MailBackend {
   ///
   /// IMAP：经 SMTP 投递并 APPEND 到「已发送」文件夹；Gmail/Graph：经各自 REST
   /// 发送端点（服务端自动归档到已发送）。失败抛 [MailBackendException]/[MailAuthException]。
-  Future<void> sendMessage(OutgoingMessage message);
+  ///
+  /// [onDraftPersisted]：Gmail/Graph 这类「先建草稿再发送」的后端，在**新建**服务端
+  /// 草稿成功后会回调一次其 id，供上层把它回写进发送任务载荷。这样发送阶段失败后的
+  /// 重试会复用同一草稿（而非每次新建 → 残留孤儿草稿），并据「草稿已不存在」判定上次
+  /// 是否其实已发出（幂等，避免重复投递）。IMAP 经 SMTP 直发、无服务端草稿，不回调。
+  Future<void> sendMessage(
+    OutgoingMessage message, {
+    Future<void> Function(String serverDraftId)? onDraftPersisted,
+  });
 
   /// 保存/更新服务端草稿。
   ///

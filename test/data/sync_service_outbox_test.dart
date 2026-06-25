@@ -259,4 +259,34 @@ void main() {
 
     expect((await db.folderDao.getFolder(folderId))!.unreadCount, 1);
   });
+
+  test('Gmail 归档无本地归档文件夹：本地移除并入队 archive', () async {
+    final folderId = await seedAccountAndFolder();
+    await db.folderDao.updateCounts(folderId, unread: 2);
+    await db.messageDao.upsertMessage(
+      MessagesCompanion.insert(
+        id: 'msg-archive',
+        accountId: 'acc-1',
+        folderId: folderId,
+        date: DateTime(2026, 1, 1),
+        gmailMessageId: const Value('gmail-archive'),
+      ),
+    );
+
+    await sync.moveMessageToFolderType('msg-archive', FolderType.archive);
+
+    expect(await db.messageDao.getMessage('msg-archive'), isNull);
+    expect((await db.folderDao.getFolder(folderId))!.unreadCount, 1);
+
+    final pending = await db.outboxDao.getPendingForAccount('acc-1');
+    expect(pending, hasLength(1));
+    expect(pending.single.opType, 'archive');
+
+    final payload = jsonDecode(pending.single.payload) as Map<String, dynamic>;
+    expect(payload['messageId'], 'msg-archive');
+    final ref = payload['ref'] as Map<String, dynamic>;
+    expect(ref['type'], 'gmail');
+    expect(ref['messageId'], 'gmail-archive');
+    expect(ref['labelId'], 'INBOX');
+  });
 }

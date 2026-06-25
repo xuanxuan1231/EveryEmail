@@ -624,7 +624,7 @@ void main() {
     expect(pending.single.payload, contains('"messageId":"graph-1"'));
   });
 
-  test('移动邮件会更新本地文件夹并写入 outbox 目标', () async {
+  test('归档邮件会更新本地归档文件夹并写入 archive outbox', () async {
     await db.accountDao.upsertAccount(
       AccountsCompanion.insert(
         id: 'acc-1',
@@ -671,8 +671,7 @@ void main() {
     expect((await db.messageDao.getMessage('m-1'))!.folderId, 'f-archive');
     final pending = await db.outboxDao.getPendingForAccount('acc-1');
     expect(pending, hasLength(1));
-    expect(pending.single.opType, 'move');
-    expect(pending.single.payload, contains('"targetFolderId":"f-archive"'));
+    expect(pending.single.opType, 'archive');
     expect(pending.single.payload, contains('"messageId":"graph-1"'));
   });
 }

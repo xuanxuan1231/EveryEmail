@@ -18,13 +18,13 @@ class OutgoingAttachmentStore {
   }) async {
     final dir = await _outgoingDir();
     final dest = File(p.join(dir.path, '${id_gen.generateId()}-$filename'));
-    final bytes = await File(sourcePath).readAsBytes();
-    await dest.writeAsBytes(bytes, flush: true);
+    // 用 File.copy 做 OS 级流式复制，避免把（最大可达上百 MB 的）整个附件读入内存。
+    await File(sourcePath).copy(dest.path);
     return OutgoingAttachment(
       filename: filename,
       mimeType: guessMimeType(filename),
       localPath: dest.path,
-      size: bytes.length,
+      size: await dest.length(),
     );
   }
 

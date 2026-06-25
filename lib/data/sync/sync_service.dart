@@ -210,12 +210,17 @@ class SyncService {
   ///
   /// 经账户串行队列执行，与同步/取信/回推互斥，避免并发触碰同一后端连接；
   /// 连接复用与 OAuth 令牌刷新都走 [_getBackend]。失败向上抛出由发送队列处理重试。
+  /// [onDraftPersisted] 透传给后端：新建服务端草稿成功后回写其 id 到任务载荷。
   Future<void> sendViaBackend(
     AccountConfig account,
-    OutgoingMessage message,
-  ) async {
+    OutgoingMessage message, {
+    Future<void> Function(String serverDraftId)? onDraftPersisted,
+  }) async {
     final backend = await _getBackend(account);
-    await _runOnAccount(account.id, () => backend.sendMessage(message));
+    await _runOnAccount(
+      account.id,
+      () => backend.sendMessage(message, onDraftPersisted: onDraftPersisted),
+    );
   }
 
   /// 把一封撰写中的邮件保存为本地草稿。
@@ -1129,7 +1134,7 @@ class SyncService {
       await _db.outboxDao.removeOpsForMessage(
         message.accountId,
         messageId,
-        const ['move', 'delete'],
+        const ['move', 'delete', 'archive'],
       );
       await _db.outboxDao.enqueue(
         OutboxOpsCompanion.insert(
@@ -1142,6 +1147,73 @@ class SyncService {
       );
       await _db.messageDao.deleteMessages([messageId]);
       if (wasUnread) await _adjustFolderUnread(message.folderId, -1);
+    });
+  }
+
+  /// 归档邮件：本地立即从当前列表移除或移到归档文件夹，并把后端归档操作入队。
+  Future<void> archiveMessage(String messageId) async {
+    final message = await _db.messageDao.getMessage(messageId);
+    if (message == null) return;
+
+    final sourceFolder = await _db.folderDao.getFolder(message.folderId);
+    if (sourceFolder?.folderType == FolderType.archive) return;
+
+    var targetFolder = await _folderByType(
+      message.accountId,
+      FolderType.archive,
+    );
+    final account = await accountConfigFor(message.accountId);
+    if (targetFolder == null && account.type == AccountType.genericImap) {
+      await syncAccount(account);
+      targetFolder = await _folderByType(message.accountId, FolderType.archive);
+      if (targetFolder == null) {
+        throw Exception('账户没有可用的${_folderTypeLabel(FolderType.archive)}文件夹');
+      }
+    }
+    final wasUnread = _isUnread(message.flagsBitmask);
+    final sourceFolderId = message.folderId;
+
+    final refPayload = await _refPayloadForMessage(message);
+    if (refPayload == null) {
+      if (targetFolder != null) {
+        await _db.messageDao.moveMessage(messageId, targetFolder.id);
+        if (wasUnread) {
+          await _adjustFolderUnread(sourceFolderId, -1);
+          await _adjustFolderUnread(targetFolder.id, 1);
+        }
+      } else {
+        await _db.messageDao.deleteMessages([messageId]);
+        if (wasUnread) await _adjustFolderUnread(sourceFolderId, -1);
+      }
+      return;
+    }
+
+    await _db.transaction(() async {
+      await _db.outboxDao.removeOpsForMessage(
+        message.accountId,
+        messageId,
+        const ['move', 'delete', 'archive'],
+      );
+      await _db.outboxDao.enqueue(
+        OutboxOpsCompanion.insert(
+          accountId: message.accountId,
+          opType: 'archive',
+          payload: Value(
+            jsonEncode({'messageId': messageId, 'ref': refPayload}),
+          ),
+        ),
+      );
+
+      if (targetFolder != null) {
+        await _db.messageDao.moveMessage(messageId, targetFolder.id);
+        if (wasUnread) {
+          await _adjustFolderUnread(sourceFolderId, -1);
+          await _adjustFolderUnread(targetFolder.id, 1);
+        }
+      } else {
+        await _db.messageDao.deleteMessages([messageId]);
+        if (wasUnread) await _adjustFolderUnread(sourceFolderId, -1);
+      }
     });
   }
 
@@ -1178,7 +1250,7 @@ class SyncService {
       await _db.outboxDao.removeOpsForMessage(
         message.accountId,
         messageId,
-        const ['move'],
+        const ['move', 'archive'],
       );
       await _db.messageDao.moveMessage(messageId, targetFolderId);
       if (wasUnread) {
@@ -1206,6 +1278,11 @@ class SyncService {
     String messageId,
     FolderType folderType,
   ) async {
+    if (folderType == FolderType.archive) {
+      await archiveMessage(messageId);
+      return;
+    }
+
     final message = await _db.messageDao.getMessage(messageId);
     if (message == null) return;
 
@@ -1257,6 +1334,7 @@ class SyncService {
     final flagOps = <(OutboxOp, MessageRef)>[];
     final unflagOps = <(OutboxOp, MessageRef)>[];
     final deleteOps = <(OutboxOp, MessageRef)>[];
+    final archiveOps = <(OutboxOp, MessageRef)>[];
     // 移动按目标文件夹分组：targetFolderId → (目标文件夹, 该组 ops)。
     final moveGroups = <String, (Folder, List<(OutboxOp, MessageRef)>)>{};
 
@@ -1299,6 +1377,8 @@ class SyncService {
         unflagOps.add((op, ref));
       } else if (opType == 'delete') {
         deleteOps.add((op, ref));
+      } else if (opType == 'archive') {
+        archiveOps.add((op, ref));
       } else if (opType == 'move') {
         final targetFolderId = payload['targetFolderId'] as String?;
         if (targetFolderId == null) {
@@ -1337,6 +1417,7 @@ class SyncService {
       () => b.markFlagged(_refsOf(unflagOps), flagged: false),
     );
     await _flushBucket(deleteOps, () => b.delete(_refsOf(deleteOps)));
+    await _flushBucket(archiveOps, () => b.archive(_refsOf(archiveOps)));
     for (final group in moveGroups.values) {
       final (folder, ops) = group;
       await _flushBucket(

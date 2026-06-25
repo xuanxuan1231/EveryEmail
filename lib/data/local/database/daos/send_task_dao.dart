@@ -73,6 +73,35 @@ class SendTaskDao extends DatabaseAccessor<AppDatabase>
         );
   }
 
+  /// 仅把「尝试次数未达上限」的 failed 任务重置为 queued。自动重试（网络恢复 /
+  /// 回前台 / 启动）用此版本，使永久失败的发送不会被无限重发，留待用户手动重试。
+  Future<void> requeueFailedUnder(int maxAttempts) {
+    return (update(sendTasks)
+          ..where(
+            (t) =>
+                t.status.equals(SendTaskStatus.failed.index) &
+                t.attempts.isSmallerThanValue(maxAttempts),
+          ))
+        .write(
+          SendTasksCompanion(
+            status: Value(SendTaskStatus.queued),
+            lastError: const Value(null),
+            updatedAt: Value(DateTime.now()),
+          ),
+        );
+  }
+
+  /// 覆盖任务载荷。发送队列在后端新建服务端草稿后回写 draftId，使失败重试复用同一
+  /// 草稿（而非每次新建残留孤儿草稿）。
+  Future<void> updatePayload(String id, String payload) {
+    return (update(sendTasks)..where((t) => t.id.equals(id))).write(
+      SendTasksCompanion(
+        payload: Value(payload),
+        updatedAt: Value(DateTime.now()),
+      ),
+    );
+  }
+
   Future<void> incrementAttempts(String id) {
     return customUpdate(
       'UPDATE send_tasks SET attempts = attempts + 1 WHERE id = ?',

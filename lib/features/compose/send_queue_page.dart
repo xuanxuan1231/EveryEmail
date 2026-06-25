@@ -30,7 +30,7 @@ class SendQueuePage extends ConsumerWidget {
         actions: [
           if (hasFailure)
             TextButton.icon(
-              onPressed: service.retryAll,
+              onPressed: () => service.retryAll(manual: true),
               icon: const Icon(Symbols.refresh),
               label: const Text('全部重试'),
             ),

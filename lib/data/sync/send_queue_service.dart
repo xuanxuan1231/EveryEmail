@@ -42,6 +42,13 @@ class SendQueueService {
   /// 串行处理标志：保证同一时刻只有一轮发送在跑，避免并发触碰后端连接 / 重复发送。
   bool _processing = false;
 
+  /// 自动重试（网络恢复 / 回前台 / 启动）的去抖与封顶。避免连接抖动时疯狂重发，也
+  /// 避免永久失败的发送（坏收件人、附件被拒等）被无限重试。达到上限的任务留在 failed，
+  /// 等用户在队列页手动重试。手动「全部重试」不受此限制。
+  static const int _maxAutoAttempts = 5;
+  static const Duration _autoRetryMinInterval = Duration(seconds: 20);
+  DateTime? _lastAutoRetryAt;
+
   /// 监听全部未完成任务（顶栏角标与队列页消费）。
   Stream<List<SendTask>> watchTasks() => _db.sendTaskDao.watchAll();
 
@@ -106,7 +113,17 @@ class SendQueueService {
     try {
       final account = await _syncService.accountConfigFor(task.accountId);
       accountType = account.type;
-      await _syncService.sendViaBackend(account, message);
+      await _syncService.sendViaBackend(
+        account,
+        message,
+        onDraftPersisted: (serverDraftId) async {
+          // 后端新建服务端草稿成功：回写 draftId 到任务载荷，让本次发送失败后的重试
+          // 复用同一草稿（避免每次重试新建 → 残留孤儿草稿），并据此判定上次是否其实
+          // 已发出（幂等，避免重复投递）。
+          message = message.copyWith(serverDraftId: serverDraftId);
+          await _db.sendTaskDao.updatePayload(task.id, message.encode());
+        },
+      );
     } catch (e) {
       await _db.sendTaskDao.incrementAttempts(task.id);
       await _db.sendTaskDao.updateStatus(
@@ -159,9 +176,23 @@ class SendQueueService {
     unawaited(processQueue());
   }
 
-  /// 重试全部失败任务（顶栏 / 队列页「全部重试」）。
-  Future<void> retryAll() async {
-    await _db.sendTaskDao.requeueAllFailed();
+  /// 重试全部失败任务。
+  ///
+  /// [manual]=true（队列页「全部重试」）：无条件重排所有 failed。
+  /// [manual]=false（网络恢复 / 回前台 / 启动自动触发）：去抖 + 只重排未达尝试上限
+  /// （[_maxAutoAttempts]）的 failed，使永久失败的发送不被无限重发。无论是否重排，都
+  /// 仍推进队列里已 queued 的任务（如上次进程被杀残留的孤儿）。
+  Future<void> retryAll({bool manual = false}) async {
+    if (manual) {
+      await _db.sendTaskDao.requeueAllFailed();
+    } else {
+      final now = DateTime.now();
+      final last = _lastAutoRetryAt;
+      if (last == null || now.difference(last) >= _autoRetryMinInterval) {
+        _lastAutoRetryAt = now;
+        await _db.sendTaskDao.requeueFailedUnder(_maxAutoAttempts);
+      }
+    }
     unawaited(processQueue());
   }
 
