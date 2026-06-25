@@ -600,13 +600,31 @@ class ImapMailBackend implements MailBackend {
   }) async {
     final client = _client;
     if (client == null) throw const MailBackendException('未连接');
+    // SMTP 直发、无服务端草稿，故不回调 onDraftPersisted。
+    final mime = await buildOutgoingMime(message);
     try {
-      final mime = await buildOutgoingMime(message);
-      // SMTP 直发、无服务端草稿，故不回调 onDraftPersisted。
-      // appendToSent：服务端不自动归档时由 enough_mail APPEND 到「已发送」。
-      await client.sendMessage(mime, appendToSent: true);
+      // 只做 SMTP 投递，不让 enough_mail 顺带 APPEND。其 sendMessage(appendToSent:true)
+      // 会把「投递」与「APPEND 到已发送」并发执行（Future.wait），只要 APPEND 失败就
+      // 整体抛错 → 发送队列重试 → 收件人重复收信。这里把两步解耦：投递成功即视为发送成功。
+      await client.sendMessage(mime, appendToSent: false);
     } on em.MailException catch (e) {
       throw MailBackendException('发送失败: ${e.message}', cause: e);
+    }
+
+    // 归档到「已发送」：尽力而为。投递已成功，APPEND 失败（配额/超时/服务端不支持等）
+    // 绝不能触发重投，故此处的异常全部吞掉、不上抛。代价：若服务端对 SMTP 提交已自动
+    // 归档，可能多出一份副本——属既有取舍，与重复投递相比可接受。
+    final sentMailbox = client.getMailbox(em.MailboxFlag.sent);
+    if (sentMailbox != null) {
+      try {
+        await client.appendMessage(
+          mime,
+          sentMailbox,
+          flags: [em.MessageFlags.seen],
+        );
+      } catch (_) {
+        // 已发送副本写入失败不影响发送结果。
+      }
     }
   }
 
