@@ -43,9 +43,14 @@ class AppConfig {
   /// 原生流程，不再使用自定义 URI scheme 回调。
   static const String redirectScheme = 'com.everyemail.app';
 
-  /// Cloudflare Worker 基址：Graph webhook / FCM 注册，以及 Google 的 server
-  /// auth code 兑换、refresh token 刷新都打到这里。
-  static const String workerBaseUrl = 'https://ee-webhook.gemen.pp.ua';
+  /// 默认 Cloudflare Worker 基址：Graph webhook / FCM 注册，以及 Google 的
+  /// server auth code 兑换、refresh token 刷新都打到这里。
+  ///
+  /// 运行时实际使用的地址由 WorkerSettingsStore 持久化；未修改时落回此默认值。
+  static const String defaultWorkerBaseUrl = 'https://ee-webhook.gemen.pp.ua';
+
+  /// 兼容旧代码路径。新代码应从 WorkerSettings 读取运行时地址。
+  static const String workerBaseUrl = defaultWorkerBaseUrl;
 
   static bool get isGoogleConfigured => googleServerClientId.isNotEmpty;
   static bool get isMicrosoftConfigured => microsoftClientId.isNotEmpty;

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -9,6 +10,7 @@ import '../../app/providers.dart';
 import '../../core/config/app_config.dart';
 import '../../core/navigation/predictive_back_shared_element.dart';
 import '../../domain/enums/account_enums.dart';
+import '../settings/widgets/worker_url_editor.dart';
 
 /// 添加账户页面（账户向导入口）。
 ///
@@ -146,6 +148,7 @@ class _AddAccountPageState extends ConsumerState<AddAccountPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final workerSettings = ref.watch(workerSettingsProvider);
 
     final scaffold = Scaffold(
       appBar: AppBar(title: const Text('添加账户')),
@@ -164,6 +167,33 @@ class _AddAccountPageState extends ConsumerState<AddAccountPage> {
               ),
             ),
             const SizedBox(height: 32),
+
+            Material(
+              color: theme.colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(8),
+              clipBehavior: Clip.antiAlias,
+              child: ListTile(
+                leading: const Icon(Symbols.cloud_sync),
+                title: const Text('推送服务'),
+                subtitle: Text(
+                  workerSettings.workerBaseUrl,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: const Icon(Symbols.edit),
+                onTap: _isDiscovering
+                    ? null
+                    : () => unawaited(showWorkerUrlEditor(context)),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Gmail 实时推送会把 refresh token 交给此 Worker 加密存储；请在登录前确认地址可信。',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 24),
 
             // 邮箱输入
             TextFormField(

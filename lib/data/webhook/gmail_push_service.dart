@@ -31,6 +31,7 @@ class GmailPushService {
     required String refreshToken,
     required String userId,
     required String accountId,
+    required String accountSecret,
     required String email,
   }) async {
     try {
@@ -41,6 +42,7 @@ class GmailPushService {
             'refreshToken': refreshToken,
             'userId': userId,
             'accountId': accountId,
+            'accountSecret': accountSecret,
             'email': email,
           },
         ),
@@ -63,13 +65,19 @@ class GmailPushService {
   Future<bool> stopWatch({
     required String userId,
     required String accountId,
+    required String accountSecret,
     required String email,
   }) async {
     try {
       await _retry(
         () => _dio.post(
           '/api/gmail/stop',
-          data: {'userId': userId, 'accountId': accountId, 'email': email},
+          data: {
+            'userId': userId,
+            'accountId': accountId,
+            'accountSecret': accountSecret,
+            'email': email,
+          },
         ),
       );
       return true;

@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:math';
+
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 /// 密钥安全存储封装（Android Keystore 支持）。
@@ -16,8 +19,12 @@ class TokenStore {
 
   final FlutterSecureStorage _storage;
 
+  static final Random _secureRandom = Random.secure();
+
   static String _refreshKey(String secretRef) => 'refresh_token::$secretRef';
   static String _passwordKey(String secretRef) => 'password::$secretRef';
+  static String _pushSecretKey(String accountId) =>
+      'push_account_secret::$accountId';
 
   Future<void> writeRefreshToken(String secretRef, String token) {
     return _storage.write(key: _refreshKey(secretRef), value: token);
@@ -41,6 +48,20 @@ class TokenStore {
 
   Future<void> deletePassword(String secretRef) {
     return _storage.delete(key: _passwordKey(secretRef));
+  }
+
+  Future<String> readOrCreatePushSecret(String accountId) async {
+    final existing = await _storage.read(key: _pushSecretKey(accountId));
+    if (existing != null && existing.isNotEmpty) return existing;
+
+    final bytes = List<int>.generate(32, (_) => _secureRandom.nextInt(256));
+    final secret = base64UrlEncode(bytes).replaceAll('=', '');
+    await _storage.write(key: _pushSecretKey(accountId), value: secret);
+    return secret;
+  }
+
+  Future<void> deletePushSecret(String accountId) {
+    return _storage.delete(key: _pushSecretKey(accountId));
   }
 
   /// 移除账户时清除其全部密钥。

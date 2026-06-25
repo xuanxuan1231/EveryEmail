@@ -4,6 +4,7 @@ import 'package:everyemail/app/providers.dart';
 import 'package:everyemail/data/local/database/app_database.dart';
 import 'package:everyemail/data/settings/app_font_settings.dart';
 import 'package:everyemail/data/settings/display_settings.dart';
+import 'package:everyemail/data/settings/worker_settings.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -21,6 +22,9 @@ void main() {
           ),
           displaySettingsProvider.overrideWith(
             (ref) => DisplaySettingsController(DisplaySettings.defaults),
+          ),
+          workerSettingsProvider.overrideWith(
+            (ref) => WorkerSettingsController(WorkerSettings.defaults),
           ),
         ],
         child: const EveryMailApp(),

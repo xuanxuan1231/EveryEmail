@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../domain/enums/account_enums.dart';
 import '../../domain/models/account_config.dart';
 import '../local/database/app_database.dart';
+import '../secure/token_store.dart';
 import '../settings/account_settings.dart';
 import '../sync/sync_service.dart';
 import 'webhook_service.dart';
@@ -25,11 +26,13 @@ class WebhookManager {
     required this.webhookService,
     required this.syncService,
     required this.db,
+    required this.tokenStore,
   });
 
   final WebhookService webhookService;
   final SyncService syncService;
   final AppDatabase db;
+  final TokenStore tokenStore;
 
   /// 每账户独立的续订定时器。
   final Map<String, Timer> _renewTimers = {};
@@ -43,7 +46,8 @@ class WebhookManager {
   /// v4: 强制重建订阅，确保已部署的富通知加密配置被应用到 Graph subscription。
   /// v5: 富通知 resource 补 `$select`，满足 Graph rich notification 校验。
   /// v6: Graph subscription resource 改为无前导斜杠的规范格式。
-  static const int _subscriptionSchemaVersion = 6;
+  /// v7: 订阅请求带账户级 push secret，并记录订阅所在 Worker URL。
+  static const int _subscriptionSchemaVersion = 7;
 
   // ---------- 单账户启用/禁用 ----------
 
@@ -58,11 +62,13 @@ class WebhookManager {
       debugPrint('账户: ${account.email}');
 
       final accessToken = await syncService.getAccessToken(account);
+      final accountSecret = await tokenStore.readOrCreatePushSecret(account.id);
 
       final result = await webhookService.createSubscription(
         accessToken: accessToken,
         userId: account.id,
         accountId: account.id,
+        accountSecret: accountSecret,
       );
 
       if (!result.success) {
@@ -117,6 +123,8 @@ class WebhookManager {
         accessToken: accessToken,
         subscriptionId: subscriptionId,
         userId: account.id,
+        accountId: account.id,
+        accountSecret: await tokenStore.readOrCreatePushSecret(account.id),
       );
 
       // 不管远端 200 还是 404，本地都清，避免下次启用时拿着过期 ID 续订失败。
@@ -142,7 +150,9 @@ class WebhookManager {
       final existingId = await _getSubscriptionId(account.id);
       if (existingId != null) {
         final version = await _getSubscriptionSchemaVersion(account.id);
-        if (version != _subscriptionSchemaVersion) {
+        final workerBaseUrl = await _getSubscriptionWorkerBaseUrl(account.id);
+        if (version != _subscriptionSchemaVersion ||
+            workerBaseUrl != webhookService.workerUrl) {
           // 旧格式订阅（旧 changeType / 无加密）。续订只 PATCH 过期时间，不会更新
           // 这些参数，必须删掉重建一次，才能启用去重 + 富通知。
           debugPrint('订阅 schema 过旧($version→$_subscriptionSchemaVersion)，重建');
@@ -168,6 +178,7 @@ class WebhookManager {
         await webhookService.registerFCMToken(
           userId: account.id,
           accountId: account.id,
+          accountSecret: await tokenStore.readOrCreatePushSecret(account.id),
           fcmToken: fcmToken,
         );
       } catch (e) {
@@ -182,6 +193,7 @@ class WebhookManager {
       return await webhookService.registerFCMToken(
         userId: accountId,
         accountId: accountId,
+        accountSecret: await tokenStore.readOrCreatePushSecret(accountId),
         fcmToken: fcmToken,
       );
     } catch (e) {
@@ -196,6 +208,7 @@ class WebhookManager {
       return await webhookService.unregisterFCMToken(
         userId: accountId,
         accountId: accountId,
+        accountSecret: await tokenStore.readOrCreatePushSecret(accountId),
       );
     } catch (e) {
       debugPrint('注销 FCM token 失败: $e');
@@ -272,10 +285,13 @@ class WebhookManager {
       }
 
       final accessToken = await syncService.getAccessToken(account);
+      final accountSecret = await tokenStore.readOrCreatePushSecret(account.id);
 
       final result = await webhookService.renewSubscription(
         accessToken: accessToken,
         subscriptionId: subscriptionId,
+        accountId: account.id,
+        accountSecret: accountSecret,
       );
 
       if (result.success) {
@@ -344,6 +360,7 @@ class WebhookManager {
       'subscriptionId': subscriptionId,
       'expirationDateTime': expirationDateTime.toIso8601String(),
       'schemaVersion': _subscriptionSchemaVersion,
+      'workerBaseUrl': webhookService.workerUrl,
     });
     await prefs.setString(_prefsKey(accountId), payload);
     debugPrint('保存订阅信息: $subscriptionId');
@@ -373,6 +390,18 @@ class WebhookManager {
       return json['schemaVersion'] as int? ?? 1;
     } catch (e) {
       return 0;
+    }
+  }
+
+  Future<String?> _getSubscriptionWorkerBaseUrl(String accountId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_prefsKey(accountId));
+    if (raw == null) return null;
+    try {
+      final json = jsonDecode(raw) as Map<String, dynamic>;
+      return json['workerBaseUrl'] as String?;
+    } catch (e) {
+      return null;
     }
   }
 

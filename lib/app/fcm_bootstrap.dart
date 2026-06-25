@@ -87,8 +87,16 @@ class _FcmBootstrapState extends ConsumerState<FcmBootstrap> {
       _tokenRefreshSub = messaging.onTokenRefresh.listen((newToken) {
         debugPrint('FCM Token 刷新: $newToken');
         ref.read(fcmTokenProvider.notifier).state = newToken;
-        unawaited(manager.registerFcmTokenForAllMicrosoftAccounts(newToken));
-        unawaited(gmailManager.registerFcmTokenForAllGmailAccounts(newToken));
+        unawaited(
+          ref
+              .read(webhookManagerProvider)
+              .registerFcmTokenForAllMicrosoftAccounts(newToken),
+        );
+        unawaited(
+          ref
+              .read(gmailWatchManagerProvider)
+              .registerFcmTokenForAllGmailAccounts(newToken),
+        );
       });
 
       // 前台收到推送：

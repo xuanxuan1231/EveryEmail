@@ -4,7 +4,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
-import '../core/config/app_config.dart';
 import '../data/auth/oauth_service.dart';
 import '../data/local/database/app_database.dart';
 import '../data/local/database/message_with_account.dart';
@@ -15,6 +14,8 @@ import '../data/settings/account_settings.dart';
 import '../data/settings/display_settings.dart';
 import '../data/settings/imap_realtime_settings.dart';
 import '../data/settings/remote_image_trust.dart';
+import '../data/settings/worker_migration_service.dart';
+import '../data/settings/worker_settings.dart';
 import '../data/sync/body_prefetch_service.dart';
 import '../data/sync/draft_sync_queue_service.dart';
 import '../data/sync/realtime_sync_service.dart';
@@ -168,6 +169,32 @@ class RemoteImageTrustController extends StateNotifier<RemoteImageTrust> {
     if (trust == state) return;
     state = trust;
     await RemoteImageTrustStore.write(trust);
+  }
+}
+
+final workerSettingsProvider =
+    StateNotifierProvider<WorkerSettingsController, WorkerSettings>((ref) {
+      throw UnimplementedError(
+        'workerSettingsProvider 必须在 ProviderScope overrides 中注入初始设置',
+      );
+    });
+
+class WorkerSettingsController extends StateNotifier<WorkerSettings> {
+  WorkerSettingsController(super.initial, {this.onWorkerBaseUrlChanging});
+
+  final Future<void> Function(String oldUrl, String newUrl)?
+  onWorkerBaseUrlChanging;
+
+  Future<void> setWorkerBaseUrl(String value) async {
+    final normalized = WorkerSettings.normalizeWorkerBaseUrl(value);
+    if (normalized == state.workerBaseUrl) return;
+
+    final oldUrl = state.workerBaseUrl;
+    await onWorkerBaseUrlChanging?.call(oldUrl, normalized);
+
+    final settings = state.copyWith(workerBaseUrl: normalized);
+    state = settings;
+    await WorkerSettingsStore.write(settings);
   }
 }
 
@@ -331,7 +358,10 @@ class AccountSettingsController extends StateNotifier<AccountSettings> {
   }
 }
 
-final oauthServiceProvider = Provider<OAuthService>((ref) => OAuthService());
+final oauthServiceProvider = Provider<OAuthService>((ref) {
+  final workerBaseUrl = ref.watch(workerSettingsProvider).workerBaseUrl;
+  return OAuthService(workerBaseUrl: workerBaseUrl);
+});
 
 final accountRepositoryProvider = Provider<AccountRepository>((ref) {
   return AccountRepository(
@@ -410,21 +440,26 @@ final draftSyncTasksProvider = StreamProvider<List<DraftSyncTask>>((ref) {
 
 /// Webhook 服务。
 final webhookServiceProvider = Provider<WebhookService>((ref) {
-  return WebhookService(workerUrl: AppConfig.workerBaseUrl);
+  final workerBaseUrl = ref.watch(workerSettingsProvider).workerBaseUrl;
+  return WebhookService(workerUrl: workerBaseUrl);
 });
 
 /// Webhook 管理器。
 final webhookManagerProvider = Provider<WebhookManager>((ref) {
-  return WebhookManager(
+  final manager = WebhookManager(
     webhookService: ref.watch(webhookServiceProvider),
     syncService: ref.watch(syncServiceProvider),
     db: ref.watch(databaseProvider),
+    tokenStore: ref.watch(tokenStoreProvider),
   );
+  ref.onDispose(manager.dispose);
+  return manager;
 });
 
 /// Gmail 推送服务（users.watch 生命周期）。
 final gmailPushServiceProvider = Provider<GmailPushService>((ref) {
-  return GmailPushService(workerUrl: AppConfig.workerBaseUrl);
+  final workerBaseUrl = ref.watch(workerSettingsProvider).workerBaseUrl;
+  return GmailPushService(workerUrl: workerBaseUrl);
 });
 
 /// Gmail watch 管理器。FCM 注册复用 [webhookServiceProvider]；续订由 Worker Cron 负责。
@@ -434,6 +469,15 @@ final gmailWatchManagerProvider = Provider<GmailWatchManager>((ref) {
     webhookService: ref.watch(webhookServiceProvider),
     tokenStore: ref.watch(tokenStoreProvider),
     db: ref.watch(databaseProvider),
+  );
+});
+
+final workerMigrationServiceProvider = Provider<WorkerMigrationService>((ref) {
+  return WorkerMigrationService(
+    db: ref.watch(databaseProvider),
+    tokenStore: ref.watch(tokenStoreProvider),
+    syncService: ref.watch(syncServiceProvider),
+    currentFcmToken: ref.watch(fcmTokenProvider),
   );
 });
 

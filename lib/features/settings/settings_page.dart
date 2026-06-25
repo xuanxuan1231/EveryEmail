@@ -21,6 +21,7 @@ import '../../domain/enums/message_enums.dart';
 import '../../domain/models/account_config.dart';
 import '../../domain/models/unified_mailbox.dart';
 import 'widgets/account_profile_editors.dart';
+import 'widgets/worker_url_editor.dart';
 
 /// 设置二级页与其入口按钮之间的共享元素 id。返回二级页时，页面会「收束」回
 /// 对应的设置项按钮（与邮件详情收束回列表卡片一致）。
@@ -97,6 +98,7 @@ class SettingsPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
     final accountsAsync = ref.watch(accountsStreamProvider);
+    final workerSettings = ref.watch(workerSettingsProvider);
     final bottomPadding = MediaQuery.paddingOf(context).bottom;
 
     return Scaffold(
@@ -149,9 +151,9 @@ class SettingsPage extends ConsumerWidget {
                       _SettingsTile(
                         icon: Symbols.cloud_sync,
                         iconColor: colors.secondary,
-                        title: '网络',
-                        subtitle: '连接与同步',
-                        trailingLabel: '自动',
+                        title: '推送服务',
+                        subtitle: workerSettings.workerBaseUrl,
+                        onTap: () => unawaited(showWorkerUrlEditor(context)),
                       ),
                     ],
                   ),

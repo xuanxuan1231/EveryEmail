@@ -46,7 +46,9 @@ class GmailWatchManager {
       debugPrint('=== 启用 Gmail watch ===');
       debugPrint('账户: ${account.email}');
 
-      final refreshToken = await tokenStore.readRefreshToken(account.secretRef!);
+      final refreshToken = await tokenStore.readRefreshToken(
+        account.secretRef!,
+      );
       if (refreshToken == null) {
         debugPrint('未找到 refresh token，跳过 watch: ${account.email}');
         return false;
@@ -56,6 +58,7 @@ class GmailWatchManager {
         refreshToken: refreshToken,
         userId: account.id,
         accountId: account.id,
+        accountSecret: await tokenStore.readOrCreatePushSecret(account.id),
         email: account.email,
       );
 
@@ -91,6 +94,7 @@ class GmailWatchManager {
         await webhookService.registerFCMToken(
           userId: account.id,
           accountId: account.id,
+          accountSecret: await tokenStore.readOrCreatePushSecret(account.id),
           fcmToken: fcmToken,
         );
       } catch (e) {
@@ -105,6 +109,7 @@ class GmailWatchManager {
       return await webhookService.registerFCMToken(
         userId: accountId,
         accountId: accountId,
+        accountSecret: await tokenStore.readOrCreatePushSecret(accountId),
         fcmToken: fcmToken,
       );
     } catch (e) {
@@ -119,6 +124,7 @@ class GmailWatchManager {
       return await webhookService.unregisterFCMToken(
         userId: accountId,
         accountId: accountId,
+        accountSecret: await tokenStore.readOrCreatePushSecret(accountId),
       );
     } catch (e) {
       debugPrint('注销 FCM token 失败: $e');
@@ -135,6 +141,7 @@ class GmailWatchManager {
         await gmailPushService.stopWatch(
           userId: account.id,
           accountId: account.id,
+          accountSecret: await tokenStore.readOrCreatePushSecret(account.id),
           email: account.email,
         );
       } catch (e) {

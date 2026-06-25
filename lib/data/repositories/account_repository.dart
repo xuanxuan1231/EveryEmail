@@ -224,6 +224,7 @@ class AccountRepository {
     if (account?.secretRef != null) {
       await _tokenStore.deleteSecrets(account!.secretRef!);
     }
+    await _tokenStore.deletePushSecret(accountId);
     await _db.accountDao.deleteAccount(accountId);
 
     // 本地痕迹清理：库行已删，下面任一步失败都不影响账户已被移除的结果。

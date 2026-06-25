@@ -6,6 +6,7 @@ import '../data/local/file_store.dart';
 import '../data/settings/app_font_settings.dart';
 import '../data/settings/display_settings.dart';
 import '../data/settings/remote_image_trust.dart';
+import '../data/settings/worker_settings.dart';
 
 /// 应用启动初始化结果。
 class BootstrapResult {
@@ -14,6 +15,7 @@ class BootstrapResult {
     required this.appFont,
     required this.displaySettings,
     required this.remoteImageTrust,
+    required this.workerSettings,
     required this.packageInfo,
   });
 
@@ -29,6 +31,9 @@ class BootstrapResult {
   /// 持久化的远程图片信任设置（注入 [remoteImageTrustProvider]）。
   final RemoteImageTrust remoteImageTrust;
 
+  /// 持久化的 Worker 设置（注入 [workerSettingsProvider]）。
+  final WorkerSettings workerSettings;
+
   /// 应用包信息（版本号、构建号等，注入 [packageInfoProvider]）。
   final PackageInfo packageInfo;
 }
@@ -42,6 +47,7 @@ Future<BootstrapResult> bootstrap() async {
   final appFont = await AppFontSettings.read();
   final displaySettings = await DisplaySettingsStore.read();
   final remoteImageTrust = await RemoteImageTrustStore.read();
+  final workerSettings = await WorkerSettingsStore.read();
   final packageInfo = await PackageInfo.fromPlatform();
 
   return BootstrapResult(
@@ -49,6 +55,7 @@ Future<BootstrapResult> bootstrap() async {
     appFont: appFont,
     displaySettings: displaySettings,
     remoteImageTrust: remoteImageTrust,
+    workerSettings: workerSettings,
     packageInfo: packageInfo,
   );
 }

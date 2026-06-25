@@ -30,6 +30,14 @@ Future<void> main() async {
         remoteImageTrustProvider.overrideWith(
           (ref) => RemoteImageTrustController(result.remoteImageTrust),
         ),
+        workerSettingsProvider.overrideWith(
+          (ref) => WorkerSettingsController(
+            result.workerSettings,
+            onWorkerBaseUrlChanging: (oldUrl, newUrl) => ref
+                .read(workerMigrationServiceProvider)
+                .migrateWorkerBaseUrl(oldUrl: oldUrl, newUrl: newUrl),
+          ),
+        ),
       ],
       child: const FcmBootstrap(
         child: RealtimeSyncCoordinator(

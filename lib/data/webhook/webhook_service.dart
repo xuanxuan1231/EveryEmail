@@ -30,6 +30,7 @@ class WebhookService {
     required String accessToken,
     required String userId,
     required String accountId,
+    required String accountSecret,
     String? resource,
   }) async {
     try {
@@ -40,6 +41,7 @@ class WebhookService {
             'accessToken': accessToken,
             'userId': userId,
             'accountId': accountId,
+            'accountSecret': accountSecret,
             'resource': resource ?? 'me/mailFolders(\'Inbox\')/messages',
           },
         ),
@@ -67,12 +69,19 @@ class WebhookService {
   Future<SubscriptionResult> renewSubscription({
     required String accessToken,
     required String subscriptionId,
+    required String accountId,
+    required String accountSecret,
   }) async {
     try {
       final response = await _retry(
         () => _dio.post(
           '/api/renew',
-          data: {'accessToken': accessToken, 'subscriptionId': subscriptionId},
+          data: {
+            'accessToken': accessToken,
+            'subscriptionId': subscriptionId,
+            'accountId': accountId,
+            'accountSecret': accountSecret,
+          },
         ),
       );
 
@@ -96,6 +105,8 @@ class WebhookService {
     required String accessToken,
     required String subscriptionId,
     required String userId,
+    required String accountId,
+    required String accountSecret,
   }) async {
     try {
       await _retry(
@@ -105,6 +116,8 @@ class WebhookService {
             'accessToken': accessToken,
             'subscriptionId': subscriptionId,
             'userId': userId,
+            'accountId': accountId,
+            'accountSecret': accountSecret,
           },
         ),
       );
@@ -123,6 +136,7 @@ class WebhookService {
   Future<bool> registerFCMToken({
     required String userId,
     required String accountId,
+    required String accountSecret,
     required String fcmToken,
   }) async {
     try {
@@ -132,6 +146,7 @@ class WebhookService {
           data: {
             'userId': userId,
             'accountId': accountId,
+            'accountSecret': accountSecret,
             'fcmToken': fcmToken,
           },
         ),
@@ -151,12 +166,17 @@ class WebhookService {
   Future<bool> unregisterFCMToken({
     required String userId,
     required String accountId,
+    required String accountSecret,
   }) async {
     try {
       await _retry(
         () => _dio.post(
           '/api/unregister-fcm',
-          data: {'userId': userId, 'accountId': accountId},
+          data: {
+            'userId': userId,
+            'accountId': accountId,
+            'accountSecret': accountSecret,
+          },
         ),
       );
       return true;

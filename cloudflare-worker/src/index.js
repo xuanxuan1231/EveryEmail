@@ -240,11 +240,14 @@ async function handleLifecycle(request, env) {
 
 // 创建 Graph API 订阅
 async function handleSubscribe(request, env) {
-  const { accessToken, userId, accountId, resource } = await request.json();
+  const { accessToken, userId, accountId, accountSecret, resource } =
+    await request.json();
 
   if (!accessToken || !userId || !accountId) {
     return jsonResponse({ error: 'Missing required fields' }, 400);
   }
+  const accountAuth = await verifyAccountSecret(env, accountId, accountSecret);
+  if (!accountAuth.ok) return accountAuth.response;
 
   // 生成唯一的 clientState
   const clientState = crypto.randomUUID();
@@ -297,6 +300,7 @@ async function handleSubscribe(request, env) {
       subscriptionId,
       userId,
       accountId,
+      accountSecretHash: accountAuth.hash,
       clientState,
       resource: result.resource,
       expirationDateTime: result.expirationDateTime,
@@ -321,10 +325,18 @@ async function handleSubscribe(request, env) {
 
 // 续订订阅
 async function handleRenew(request, env) {
-  const { accessToken, subscriptionId } = await request.json();
+  const { accessToken, subscriptionId, accountId, accountSecret } =
+    await request.json();
 
-  if (!accessToken || !subscriptionId) {
+  if (!accessToken || !subscriptionId || !accountId) {
     return jsonResponse({ error: 'Missing required fields' }, 400);
+  }
+  const accountAuth = await verifyAccountSecret(env, accountId, accountSecret);
+  if (!accountAuth.ok) return accountAuth.response;
+
+  let subscription = await env.KV.get(`subscription:${subscriptionId}`, 'json');
+  if (subscription?.accountId && subscription.accountId !== accountId) {
+    return jsonResponse({ error: 'Subscription/account mismatch' }, 403);
   }
 
   const expirationDateTime = getSubscriptionExpirationDate();
@@ -347,9 +359,9 @@ async function handleRenew(request, env) {
   const result = await response.json();
 
   // 更新 KV 中的过期时间
-  const subscription = await env.KV.get(`subscription:${subscriptionId}`, 'json');
   if (subscription) {
     subscription.expirationDateTime = result.expirationDateTime;
+    subscription.accountSecretHash = accountAuth.hash;
     await env.KV.put(
       `subscription:${subscriptionId}`,
       JSON.stringify(subscription),
@@ -367,10 +379,18 @@ async function handleRenew(request, env) {
 
 // 删除订阅
 async function handleUnsubscribe(request, env) {
-  const { accessToken, subscriptionId, userId } = await request.json();
+  const { accessToken, subscriptionId, userId, accountId, accountSecret } =
+    await request.json();
 
-  if (!accessToken || !subscriptionId) {
+  if (!accessToken || !subscriptionId || !accountId) {
     return jsonResponse({ error: 'Missing required fields' }, 400);
+  }
+  const accountAuth = await verifyAccountSecret(env, accountId, accountSecret);
+  if (!accountAuth.ok) return accountAuth.response;
+
+  const subscription = await env.KV.get(`subscription:${subscriptionId}`, 'json');
+  if (subscription?.accountId && subscription.accountId !== accountId) {
+    return jsonResponse({ error: 'Subscription/account mismatch' }, 403);
   }
 
   // 调用 Graph API 删除订阅
@@ -404,11 +424,13 @@ async function handleUnsubscribe(request, env) {
 
 // 注册 FCM token
 async function handleRegisterFCM(request, env) {
-  const { userId, accountId, fcmToken } = await request.json();
+  const { userId, accountId, accountSecret, fcmToken } = await request.json();
 
   if (!userId || !accountId || !fcmToken) {
     return jsonResponse({ error: 'Missing required fields' }, 400);
   }
+  const accountAuth = await verifyAccountSecret(env, accountId, accountSecret);
+  if (!accountAuth.ok) return accountAuth.response;
 
   // 保存 FCM token
   await env.KV.put(`fcm:${userId}:${accountId}`, fcmToken);
@@ -420,13 +442,16 @@ async function handleRegisterFCM(request, env) {
 
 // 注销 FCM token（删除账户时调用，清理 KV 映射）
 async function handleUnregisterFCM(request, env) {
-  const { userId, accountId } = await request.json();
+  const { userId, accountId, accountSecret } = await request.json();
 
   if (!userId || !accountId) {
     return jsonResponse({ error: 'Missing required fields' }, 400);
   }
+  const accountAuth = await verifyAccountSecret(env, accountId, accountSecret);
+  if (!accountAuth.ok) return accountAuth.response;
 
   await env.KV.delete(`fcm:${userId}:${accountId}`);
+  await env.KV.delete(accountSecretKey(accountId));
 
   console.log(`FCM token unregistered for user: ${userId}, account: ${accountId}`);
 
@@ -544,12 +569,14 @@ const GMAIL_API_ROOT = 'https://gmail.googleapis.com/gmail/v1/users/me';
 
 // 建立 / 重建 users.watch，落库 watch 元数据 + 加密 refresh token + email 索引。
 async function handleGmailWatch(request, env) {
-  const { refreshToken, userId, accountId, email } = await request
+  const { refreshToken, userId, accountId, accountSecret, email } = await request
     .json()
     .catch(() => ({}));
   if (!refreshToken || !accountId || !email) {
     return jsonResponse({ error: 'Missing required fields' }, 400);
   }
+  const accountAuth = await verifyAccountSecret(env, accountId, accountSecret);
+  if (!accountAuth.ok) return accountAuth.response;
   if (!env.GMAIL_PUBSUB_TOPIC) {
     return jsonResponse({ error: 'Worker 未配置 GMAIL_PUBSUB_TOPIC' }, 500);
   }
@@ -584,6 +611,7 @@ async function handleGmailWatch(request, env) {
       accountId,
       userId: userId || accountId,
       email: normalizedEmail,
+      accountSecretHash: accountAuth.hash,
       encRefreshToken,
       lastHistoryId,
       expiration,
@@ -600,10 +628,14 @@ async function handleGmailWatch(request, env) {
 
 // 停止 watch。users.stop 是按整个邮箱生效的，故仅当该邮箱再无设备注册时才真正 stop。
 async function handleGmailStop(request, env) {
-  const { accountId, email } = await request.json().catch(() => ({}));
+  const { accountId, accountSecret, email } = await request
+    .json()
+    .catch(() => ({}));
   if (!accountId) {
     return jsonResponse({ error: 'Missing required fields' }, 400);
   }
+  const accountAuth = await verifyAccountSecret(env, accountId, accountSecret);
+  if (!accountAuth.ok) return accountAuth.response;
 
   const record = await env.KV.get(`gmail:watch:${accountId}`, 'json');
   const normalizedEmail = String(email || record?.email || '').toLowerCase();
@@ -1210,6 +1242,61 @@ function buildNotificationBody(subject, bodyPreview) {
   }
 
   return normalizedSubject || normalizedPreview;
+}
+
+function accountSecretKey(accountId) {
+  return `account:secret:${accountId}`;
+}
+
+async function verifyAccountSecret(env, accountId, accountSecret) {
+  if (!accountId || !accountSecret) {
+    return {
+      ok: false,
+      response: jsonResponse({ error: 'Missing accountSecret' }, 401),
+    };
+  }
+
+  const hash = await sha256Hex(String(accountSecret));
+  const key = accountSecretKey(accountId);
+  const storedHash = await env.KV.get(key);
+  if (!storedHash) {
+    await env.KV.put(key, hash);
+    return { ok: true, hash };
+  }
+  if (!constantTimeEqual(storedHash, hash)) {
+    return {
+      ok: false,
+      response: jsonResponse({ error: 'Unauthorized' }, 401),
+    };
+  }
+  return { ok: true, hash };
+}
+
+async function sha256Hex(value) {
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(value)
+  );
+  return bytesToHex(new Uint8Array(digest));
+}
+
+function bytesToHex(bytes) {
+  let hex = '';
+  for (let i = 0; i < bytes.length; i++) {
+    hex += bytes[i].toString(16).padStart(2, '0');
+  }
+  return hex;
+}
+
+function constantTimeEqual(a, b) {
+  const left = String(a);
+  const right = String(b);
+  if (left.length !== right.length) return false;
+  let diff = 0;
+  for (let i = 0; i < left.length; i++) {
+    diff |= left.charCodeAt(i) ^ right.charCodeAt(i);
+  }
+  return diff === 0;
 }
 
 // 工具函数：JSON 响应
